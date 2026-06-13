@@ -5,7 +5,8 @@
   "main": "src/check.js",
   "scripts": {
     "check": "node src/check.js",
-    "login": "node src/login.js"
+    "login": "node src/login.js",
+    "summary": "node src/summary.js"
   },
   "keywords": [],
   "author": "",

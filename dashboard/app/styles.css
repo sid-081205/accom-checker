@@ -113,6 +113,13 @@ pre {
   gap: 0.75rem;
 }
 
+.button-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  margin-top: 1rem;
+}
+
 .eyebrow {
   margin: 0 0 0.5rem;
   color: #93c5fd;

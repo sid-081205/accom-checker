@@ -1,7 +1,7 @@
 import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 import { isAuthenticated } from "../lib/auth";
-import { getEvents, getStatus } from "../lib/githubStatus";
+import { getControl, getEvents, getStatus } from "../lib/githubStatus";
 
 export const dynamic = "force-dynamic";
 
@@ -20,7 +20,9 @@ function stateLabel(state) {
     ok: "No Availability",
     availability_found: "Availability Found",
     needs_mfa: "Needs Authenticator Approval",
+    needs_email_code: "Needs Email Code",
     login_failed: "Login Failed",
+    paused: "Paused",
     error: "Error",
   };
   return labels[state] || "Unknown";
@@ -28,7 +30,7 @@ function stateLabel(state) {
 
 function stateClass(state) {
   if (state === "availability_found") return "good";
-  if (state === "needs_mfa") return "warn";
+  if (state === "needs_mfa" || state === "needs_email_code" || state === "paused") return "warn";
   if (state === "error" || state === "login_failed") return "bad";
   return "neutral";
 }
@@ -39,7 +41,7 @@ export default async function DashboardPage() {
     redirect("/login");
   }
 
-  const [status, events] = await Promise.all([getStatus(), getEvents()]);
+  const [status, events, control] = await Promise.all([getStatus(), getEvents(), getControl()]);
   const currentState = status?.state || "unknown";
 
   return (
@@ -65,6 +67,24 @@ export default async function DashboardPage() {
 
       <section className="grid">
         <article className="card">
+          <p className="eyebrow">Process Control</p>
+          <h3>{control.enabled ? "Running" : "Paused"}</h3>
+          <p className="muted">
+            {control.enabled
+              ? "Scheduled checks are allowed to run."
+              : "Scheduled checks exit without opening LSE."}
+          </p>
+          <form action="/api/control" method="post" className="button-row">
+            <button name="action" value="start" type="submit">
+              Start
+            </button>
+            <button className="secondary" name="action" value="stop" type="submit">
+              Stop
+            </button>
+          </form>
+        </article>
+
+        <article className="card">
           <p className="eyebrow">Last Run</p>
           <h3>{formatDate(status?.checkedAt || status?.updatedAt)}</h3>
           {status?.workflowUrl ? (
@@ -88,6 +108,13 @@ export default async function DashboardPage() {
             <>
               <h3 className="mfa-code">{status.mfaCode}</h3>
               <p className="muted">Approve this number in Microsoft Authenticator.</p>
+            </>
+          ) : status?.state === "needs_email_code" ? (
+            <>
+              <h3>Email code needed</h3>
+              <p className="muted">
+                The checker emailed you. Run local login to enter the inbox code and refresh cookies.
+              </p>
             </>
           ) : (
             <>

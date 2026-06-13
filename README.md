@@ -57,6 +57,8 @@ The script follows the current booking flow:
 
 The repository includes a scheduled workflow at `.github/workflows/check-availability.yml`. It runs every 5 minutes, restores cached Selenium cookies, checks availability, and sends an email only when the no-availability message disappears.
 
+`.github/workflows/daily-summary.yml` sends a summary email near the end of each London day with run counts, availability signals, auth prompts, and errors.
+
 Set these GitHub Secrets:
 
 ```sh
@@ -67,6 +69,8 @@ gh secret set LSE_PASSWORD --body "your-lse-password"
 The SMTP secrets are also required: `SMTP_HOST`, `SMTP_PORT`, `SMTP_SECURE`, `SMTP_USER`, `SMTP_PASS`, `EMAIL_FROM`, and `EMAIL_TO`.
 
 `LSE_COOKIES_B64` is optional once `LSE_EMAIL` and `LSE_PASSWORD` are configured. If cookies expire, Selenium starts the Microsoft login flow, writes the Authenticator number to the dashboard, emails the same number, waits for approval, then caches refreshed cookies for later runs.
+
+If Microsoft asks for an email verification code instead of Authenticator number matching, the checker sends an operational email and marks the dashboard as `Needs Email Code`. It cannot read your inbox automatically, so refresh the cookies with `npm run login`.
 
 Checker status is written for free to `status.json` and `events.json` on the repo's `status` branch. The workflow uses GitHub's built-in `GITHUB_TOKEN` for these writes.
 
@@ -79,6 +83,7 @@ The Vercel dashboard lives in `dashboard/`. It shows:
 - workflow run link
 - room count and latest summary
 - Microsoft Authenticator number when approval is needed
+- start/stop controls for scheduled checks
 - recent status events
 
 Deploy by importing this repo into Vercel and setting the Vercel project root directory to `dashboard`.
@@ -93,6 +98,8 @@ GITHUB_STATUS_BRANCH=status
 ```
 
 `GITHUB_STATUS_TOKEN` only needs read-only Contents access to this private repo. It lets the Vercel dashboard read `status.json` and `events.json` from the `status` branch.
+
+Dashboard start/stop controls also need `GITHUB_STATUS_WRITE_TOKEN` with Contents read/write access. To trigger a run immediately after pressing Start, the token also needs Actions write access.
 
 ## Local Schedule
 

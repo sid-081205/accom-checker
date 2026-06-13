@@ -5,7 +5,7 @@ const path = require("path");
 const nodemailer = require("nodemailer");
 const { Builder, By, until } = require("selenium-webdriver");
 const chrome = require("selenium-webdriver/chrome");
-const { appendEvent, writeStatus } = require("./status");
+const { appendEvent, readControl, writeStatus } = require("./status");
 
 const START_URL =
   "https://lsestudentaccommodation.lse.ac.uk/Pages/EN/Lander.aspx?wf=Hub";
@@ -206,6 +206,22 @@ async function automateLogin(driver) {
   );
   await clickButtonByText(driver, "sign in");
 
+  const authText = await bodyText(driver);
+  if (/email|verification code|enter code|security code/i.test(authText)) {
+    const message =
+      "LSE/Microsoft login is asking for an email verification code. The checker cannot read your inbox automatically, so run `npm run login` locally to refresh the session.";
+    await writeStatus({
+      state: "needs_email_code",
+      message,
+    });
+    await appendEvent({
+      state: "needs_email_code",
+      message,
+    });
+    await sendOperationalEmail("LSE accommodation checker needs email verification", message);
+    throw new Error(message);
+  }
+
   const code = await driver.wait(async () => extractMfaCode(driver), 30000);
   const message = `Microsoft Authenticator approval required. Enter/approve number ${code}.`;
   await writeStatus({
@@ -357,6 +373,22 @@ async function sendOperationalEmail(subject, text) {
 }
 
 async function main() {
+  const control = await readControl();
+  if (!control.enabled) {
+    const message = "Checker is paused from the dashboard.";
+    await writeStatus({
+      state: "paused",
+      message,
+      control,
+    });
+    await appendEvent({
+      state: "paused",
+      message,
+    });
+    console.log(message);
+    return;
+  }
+
   const driver = await createDriver();
 
   try {

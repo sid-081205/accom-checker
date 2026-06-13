@@ -4,7 +4,8 @@ const path = require("path");
 const STATUS_BRANCH = process.env.STATUS_BRANCH || "status";
 const STATUS_PATH = ".state/status.json";
 const EVENTS_PATH = ".state/events.json";
-const MAX_EVENTS = 50;
+const CONTROL_PATH = ".state/control.json";
+const MAX_EVENTS = 1000;
 
 function githubConfigured() {
   return Boolean(process.env.GITHUB_TOKEN && process.env.GITHUB_REPOSITORY);
@@ -86,6 +87,22 @@ async function writeRemoteJson(filePath, value) {
   });
 }
 
+async function readRemoteJson(filePath, fallback) {
+  if (!githubConfigured()) return fallback;
+
+  const repo = process.env.GITHUB_REPOSITORY;
+  const file = await githubRequest(
+    `/repos/${repo}/contents/${encodeURIComponent(filePath)}?ref=${STATUS_BRANCH}`,
+    {
+      headers: {
+        Accept: "application/vnd.github.raw+json",
+      },
+    }
+  );
+
+  return file || fallback;
+}
+
 async function readLocalJson(filePath, fallback) {
   try {
     return JSON.parse(await fs.readFile(filePath, "utf8"));
@@ -131,7 +148,19 @@ async function appendEvent(event) {
   await safeStatusWrite(EVENTS_PATH, events);
 }
 
+async function readControl() {
+  const fallback = { enabled: true };
+  const local = await readLocalJson(CONTROL_PATH, null);
+  const remote = await readRemoteJson("control.json", local || fallback);
+  return {
+    enabled: remote?.enabled !== false,
+    updatedAt: remote?.updatedAt,
+    updatedBy: remote?.updatedBy,
+  };
+}
+
 module.exports = {
   appendEvent,
+  readControl,
   writeStatus,
 };
