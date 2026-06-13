@@ -30,7 +30,13 @@ When the message disappears, the checker emails visible room rows from the page.
    npm run login
    ```
 
-   Complete the LSE login in the browser window, navigate until you can see the accommodation dashboard or rooms page, then press Enter in the terminal. The saved cookies are written to `.auth/lse-storage-state.json`, which is ignored by git.
+   Complete the LSE login in the browser window, navigate until you can see the accommodation dashboard or rooms page, then press Enter in the terminal. The saved Selenium cookies are written to `.auth/lse-cookies.json`, which is ignored by git.
+
+5. For GitHub Actions, upload those cookies as a secret:
+
+   ```sh
+   base64 -i .auth/lse-cookies.json | gh secret set LSE_COOKIES_B64
+   ```
 
 ## Run
 

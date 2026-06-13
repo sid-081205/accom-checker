@@ -3,12 +3,13 @@ require("dotenv").config();
 const fs = require("fs/promises");
 const path = require("path");
 const nodemailer = require("nodemailer");
-const { chromium } = require("playwright");
+const { Builder, By, until } = require("selenium-webdriver");
+const chrome = require("selenium-webdriver/chrome");
 
 const START_URL =
   "https://lsestudentaccommodation.lse.ac.uk/Pages/EN/Lander.aspx?wf=Hub";
 const NO_AVAILABILITY_TEXT = "No residences currently have availability";
-const AUTH_STATE_PATH = path.resolve(".auth/lse-storage-state.json");
+const AUTH_COOKIES_PATH = path.resolve(".auth/lse-cookies.json");
 const STATE_PATH = path.resolve(".state/last-result.json");
 
 async function exists(filePath) {
@@ -30,50 +31,101 @@ async function writeJson(filePath, data) {
   await fs.writeFile(filePath, JSON.stringify(data, null, 2));
 }
 
-async function clickIfVisible(page, locator, timeout = 5000) {
+async function createDriver() {
+  const options = new chrome.Options();
+  if (process.env.HEADLESS !== "false") {
+    options.addArguments("--headless=new");
+  }
+  options.addArguments("--no-sandbox", "--disable-dev-shm-usage", "--window-size=1440,1200");
+
+  return new Builder().forBrowser("chrome").setChromeOptions(options).build();
+}
+
+async function bodyText(driver) {
+  return driver.findElement(By.css("body")).getText();
+}
+
+async function loadCookies(driver) {
+  await driver.get(START_URL);
+  const cookies = await readJson(AUTH_COOKIES_PATH);
+  for (const cookie of cookies) {
+    const seleniumCookie = { ...cookie };
+    if (seleniumCookie.expiry && seleniumCookie.expiry < Math.floor(Date.now() / 1000)) {
+      continue;
+    }
+    await driver.manage().addCookie(seleniumCookie);
+  }
+}
+
+async function clickIfVisible(driver, locator, timeout = 5000) {
   try {
-    await locator.waitFor({ state: "visible", timeout });
-    await locator.click();
-    await page.waitForLoadState("domcontentloaded");
+    const element = await driver.wait(until.elementLocated(locator), timeout);
+    await driver.wait(until.elementIsVisible(element), timeout);
+    await element.click();
+    await driver.sleep(1000);
     return true;
   } catch {
     return false;
   }
 }
 
-async function reachAvailabilityPage(page) {
-  await page.goto(START_URL, { waitUntil: "domcontentloaded" });
+async function chooseWestminsterNo(driver) {
+  await driver.executeScript(() => {
+    const labels = [...document.querySelectorAll("label")];
+    const noLabel = labels.find((label) => label.textContent.trim() === "No");
+    if (!noLabel) return;
 
-  const bodyText = await page.locator("body").innerText();
-  if (bodyText.includes("Please login") || bodyText.includes("Login")) {
+    const input =
+      noLabel.control ||
+      noLabel.previousElementSibling ||
+      document.getElementById(noLabel.getAttribute("for"));
+    if (input) {
+      input.checked = true;
+      input.dispatchEvent(new Event("change", { bubbles: true }));
+      input.dispatchEvent(new Event("click", { bubbles: true }));
+    }
+  });
+}
+
+async function reachAvailabilityPage(driver) {
+  await driver.get(START_URL);
+
+  let text = await bodyText(driver);
+  if (text.includes("Please login") || text.includes("Login")) {
     throw new Error(
       "Not logged in. Run `npm run login`, complete LSE login, then run the checker again."
     );
   }
 
-  await clickIfVisible(page, page.getByRole("link", { name: /continue booking/i }));
-
-  const westminsterQuestion = page.getByText(
-    /Would you like to book a room in urbanest Westminster Bridge/i
+  await clickIfVisible(
+    driver,
+    By.xpath("//a[contains(translate(normalize-space(.), 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'continue booking')]")
   );
-  if (await westminsterQuestion.isVisible().catch(() => false)) {
-    await page.getByLabel("No").check();
-    await page.getByRole("button", { name: /continue/i }).click();
-    await page.waitForLoadState("domcontentloaded");
+
+  text = await bodyText(driver);
+  if (text.includes("Would you like to book a room in urbanest Westminster Bridge")) {
+    await chooseWestminsterNo(driver);
+    await clickIfVisible(
+      driver,
+      By.xpath("//button[contains(translate(normalize-space(.), 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'continue')]")
+    );
   }
 
-  if (await page.getByRole("button", { name: /confirm/i }).isVisible().catch(() => false)) {
-    await page.getByRole("button", { name: /confirm/i }).click();
-    await page.waitForLoadState("domcontentloaded");
+  text = await bodyText(driver);
+  if (text.includes("About You")) {
+    await clickIfVisible(
+      driver,
+      By.xpath("//button[contains(translate(normalize-space(.), 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'confirm')]")
+    );
   }
 
-  await page.getByText(/Select your room type/i).waitFor({ timeout: 15000 });
+  await driver.wait(async () => (await bodyText(driver)).includes("Select your room type"), 15000);
 }
 
-async function extractAvailability(page) {
-  const bodyText = await page.locator("body").innerText();
-  const rooms = await page.locator(".RoomRow").evaluateAll((rows) =>
-    rows.map((row) => ({
+async function extractAvailability(driver) {
+  const text = await bodyText(driver);
+  const rooms = await driver.executeScript(() =>
+    [...document.querySelectorAll(".RoomRow")].map((row) => ({
       text: row.innerText.trim().replace(/\n{3,}/g, "\n\n"),
       data: { ...row.dataset },
     }))
@@ -81,10 +133,10 @@ async function extractAvailability(page) {
 
   return {
     checkedAt: new Date().toISOString(),
-    url: page.url(),
-    noAvailability: bodyText.includes(NO_AVAILABILITY_TEXT),
+    url: await driver.getCurrentUrl(),
+    noAvailability: text.includes(NO_AVAILABILITY_TEXT),
     rooms,
-    pageSummary: bodyText
+    pageSummary: text
       .split("\n")
       .map((line) => line.trim())
       .filter(Boolean)
@@ -150,19 +202,16 @@ async function sendEmail(result) {
 }
 
 async function main() {
-  if (!(await exists(AUTH_STATE_PATH))) {
+  if (!(await exists(AUTH_COOKIES_PATH))) {
     throw new Error("Missing saved login. Run `npm run login` first.");
   }
 
-  const browser = await chromium.launch({
-    headless: process.env.HEADLESS !== "false",
-  });
-  const context = await browser.newContext({ storageState: AUTH_STATE_PATH });
-  const page = await context.newPage();
+  const driver = await createDriver();
 
   try {
-    await reachAvailabilityPage(page);
-    const result = await extractAvailability(page);
+    await loadCookies(driver);
+    await reachAvailabilityPage(driver);
+    const result = await extractAvailability(driver);
     const currentFingerprint = fingerprint(result);
     const previous = await readJson(STATE_PATH);
 
@@ -188,7 +237,7 @@ async function main() {
     await sendEmail(result);
     console.log(`[${result.checkedAt}] Availability signal found; email sent.`);
   } finally {
-    await browser.close();
+    await driver.quit();
   }
 }
 
