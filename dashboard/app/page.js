@@ -35,6 +35,20 @@ function stateClass(state) {
   return "neutral";
 }
 
+function nextScheduledRun() {
+  const now = new Date();
+  const next = new Date(now);
+  const minutes = next.getUTCMinutes();
+  const minutesToAdd = 5 - (minutes % 5 || 5);
+
+  next.setUTCMinutes(minutes + minutesToAdd, 0, 0);
+  if (next <= now) {
+    next.setUTCMinutes(next.getUTCMinutes() + 5, 0, 0);
+  }
+
+  return next;
+}
+
 export default async function DashboardPage({ searchParams }) {
   const cookieStore = await cookies();
   if (!isAuthenticated(cookieStore)) {
@@ -44,6 +58,7 @@ export default async function DashboardPage({ searchParams }) {
   const params = await searchParams;
   const [status, events, control] = await Promise.all([getStatus(), getEvents(), getControl()]);
   const currentState = status?.state || "unknown";
+  const showAuthCard = status?.state === "needs_mfa" || status?.state === "needs_email_code";
 
   return (
     <main className="shell">
@@ -99,19 +114,28 @@ export default async function DashboardPage({ searchParams }) {
         </article>
 
         <article className="card">
+          <p className="eyebrow">Next Scheduled Run</p>
+          <h3>{control.enabled ? formatDate(nextScheduledRun()) : "Paused"}</h3>
+          <p className="muted">
+            {control.enabled ? "GitHub Actions is scheduled every 5 minutes." : "Press Start to resume checks."}
+          </p>
+        </article>
+
+        <article className="card">
           <p className="eyebrow">Availability</p>
           <h3>{status?.noAvailability === false ? "Potentially live" : "No rooms seen"}</h3>
           <p className="muted">Room rows detected: {status?.roomCount ?? 0}</p>
         </article>
 
-        <article className="card">
-          <p className="eyebrow">Authenticator</p>
-          {status?.state === "needs_mfa" && status?.mfaCode ? (
+        {showAuthCard ? (
+          <article className="card">
+            <p className="eyebrow">Authentication</p>
+            {status?.state === "needs_mfa" && status?.mfaCode ? (
             <>
               <h3 className="mfa-code">{status.mfaCode}</h3>
               <p className="muted">Approve this number in Microsoft Authenticator.</p>
             </>
-          ) : status?.state === "needs_email_code" ? (
+            ) : status?.state === "needs_email_code" ? (
             <>
               <h3>Email code needed</h3>
               <p className="muted">
@@ -125,13 +149,9 @@ export default async function DashboardPage({ searchParams }) {
                 </button>
               </form>
             </>
-          ) : (
-            <>
-              <h3>No approval needed</h3>
-              <p className="muted">The saved LSE session is currently enough or no run is active.</p>
-            </>
-          )}
-        </article>
+            ) : null}
+          </article>
+        ) : null}
       </section>
 
       <section className="card">
