@@ -121,26 +121,31 @@ export async function writeControl(control) {
   }
 
   await ensureStatusBranch();
-  const sha = await getFileSha("control.json");
-  const response = await fetch(`https://api.github.com/repos/${REPO}/contents/control.json`, {
-    method: "PUT",
-    headers: {
-      Accept: "application/vnd.github+json",
-      Authorization: `Bearer ${token}`,
-      "Content-Type": "application/json",
-      "X-GitHub-Api-Version": "2022-11-28",
-    },
-    body: JSON.stringify({
-      branch: BRANCH,
-      message: "Update dashboard control [skip ci]",
-      content: Buffer.from(JSON.stringify(control, null, 2)).toString("base64"),
-      ...(sha ? { sha } : {}),
-    }),
-  });
 
-  if (!response.ok) {
+  for (let attempt = 1; attempt <= 3; attempt += 1) {
+    const sha = await getFileSha("control.json");
+    const response = await fetch(`https://api.github.com/repos/${REPO}/contents/control.json`, {
+      method: "PUT",
+      headers: {
+        Accept: "application/vnd.github+json",
+        Authorization: `Bearer ${token}`,
+        "Content-Type": "application/json",
+        "X-GitHub-Api-Version": "2022-11-28",
+      },
+      body: JSON.stringify({
+        branch: BRANCH,
+        message: "Update dashboard control [skip ci]",
+        content: Buffer.from(JSON.stringify(control, null, 2)).toString("base64"),
+        ...(sha ? { sha } : {}),
+      }),
+    });
+
+    if (response.ok) return;
+
     const text = await response.text();
-    throw new Error(`GitHub control write failed: ${response.status} ${response.statusText}: ${text}`);
+    if (response.status !== 409 || attempt === 3) {
+      throw new Error(`GitHub control write failed: ${response.status} ${response.statusText}: ${text}`);
+    }
   }
 }
 
