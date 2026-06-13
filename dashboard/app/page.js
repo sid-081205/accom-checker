@@ -60,6 +60,8 @@ export default async function DashboardPage({ searchParams }) {
   const [status, events, control] = await Promise.all([getStatus(), getEvents(), getControl()]);
   const currentState = status?.state || "unknown";
   const showAuthCard = status?.state === "needs_mfa" || status?.state === "needs_email_code";
+  const statusTime = status?.updatedAt || status?.checkedAt;
+  const detailTime = status?.checkedAt || status?.updatedAt;
 
   return (
     <main className="shell">
@@ -77,13 +79,16 @@ export default async function DashboardPage({ searchParams }) {
       </header>
 
       <section className={`hero card ${stateClass(currentState)}`}>
-        <p className="eyebrow">Current Status</p>
+        <div className="section-heading">
+          <p className="eyebrow">Current Status</p>
+          <span className="timestamp">Updated {formatDate(statusTime)}</span>
+        </div>
         <h2>{stateLabel(currentState)}</h2>
         <p>{status?.message || "No status has been written yet."}</p>
         {params?.controlError ? <p className="alert error">{params.controlError}</p> : null}
       </section>
 
-      <section className="grid">
+      <section className="grid stats-grid">
         <article className="card">
           <p className="eyebrow">Process Control</p>
           <h3>{control.enabled ? "Running" : "Paused"}</h3>
@@ -128,15 +133,17 @@ export default async function DashboardPage({ searchParams }) {
           <p className="muted">Room rows detected: {status?.roomCount ?? 0}</p>
         </article>
 
-        {showAuthCard ? (
-          <article className="card">
-            <p className="eyebrow">Authentication</p>
-            {status?.state === "needs_mfa" && status?.mfaCode ? (
+      </section>
+
+      {showAuthCard ? (
+        <section className="card auth-panel">
+          <p className="eyebrow">Authentication</p>
+          {status?.state === "needs_mfa" && status?.mfaCode ? (
             <>
               <h3 className="mfa-code">{status.mfaCode}</h3>
               <p className="muted">Approve this number in Microsoft Authenticator.</p>
             </>
-            ) : status?.state === "needs_email_code" ? (
+          ) : status?.state === "needs_email_code" ? (
             <>
               <h3>Email code needed</h3>
               <p className="muted">
@@ -150,18 +157,26 @@ export default async function DashboardPage({ searchParams }) {
                 </button>
               </form>
             </>
-            ) : null}
-          </article>
-        ) : null}
-      </section>
+          ) : null}
+        </section>
+      ) : null}
 
       <section className="card">
-        <p className="eyebrow">Latest Details</p>
+        <div className="section-heading">
+          <p className="eyebrow">Latest Details</p>
+          <span className="timestamp">From {formatDate(detailTime)}</span>
+        </div>
         <pre>{status?.summary || status?.error || "Nothing to show yet."}</pre>
       </section>
 
-      <section className="card">
-        <p className="eyebrow">Recent Events</p>
+      <details className="card events-card">
+        <summary>
+          <span>
+            <span className="eyebrow">Recent Events</span>
+            <span className="muted">{events.length} recorded</span>
+          </span>
+          <span className="chevron">Show</span>
+        </summary>
         {events.length > 0 ? (
           <ol className="events">
             {events.map((event, index) => (
@@ -175,7 +190,7 @@ export default async function DashboardPage({ searchParams }) {
         ) : (
           <p className="muted">No events have been recorded yet.</p>
         )}
-      </section>
+      </details>
 
       <meta httpEquiv="refresh" content="60" />
     </main>
