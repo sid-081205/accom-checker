@@ -35,12 +35,13 @@ function stateClass(state) {
   return "neutral";
 }
 
-export default async function DashboardPage() {
+export default async function DashboardPage({ searchParams }) {
   const cookieStore = await cookies();
   if (!isAuthenticated(cookieStore)) {
     redirect("/login");
   }
 
+  const params = await searchParams;
   const [status, events, control] = await Promise.all([getStatus(), getEvents(), getControl()]);
   const currentState = status?.state || "unknown";
 
@@ -63,6 +64,7 @@ export default async function DashboardPage() {
         <p className="eyebrow">Current Status</p>
         <h2>{stateLabel(currentState)}</h2>
         <p>{status?.message || "No status has been written yet."}</p>
+        {params?.controlError ? <p className="alert error">{params.controlError}</p> : null}
       </section>
 
       <section className="grid">

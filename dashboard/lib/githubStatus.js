@@ -1,5 +1,6 @@
 const REPO = process.env.GITHUB_STATUS_REPO || "sid-081205/accom-checker";
 const BRANCH = process.env.GITHUB_STATUS_BRANCH || "status";
+const DEFAULT_BRANCH = process.env.GITHUB_STATUS_DEFAULT_BRANCH || "master";
 
 function statusToken({ write = false } = {}) {
   return write
@@ -68,12 +69,58 @@ async function getFileSha(filePath) {
   return payload.sha;
 }
 
+async function githubApi(route, options = {}) {
+  const token = statusToken({ write: options.write });
+  if (!token) {
+    throw new Error("GitHub status token is not configured.");
+  }
+
+  const response = await fetch(`https://api.github.com${route}`, {
+    ...options,
+    headers: {
+      Accept: "application/vnd.github+json",
+      Authorization: `Bearer ${token}`,
+      "Content-Type": "application/json",
+      "X-GitHub-Api-Version": "2022-11-28",
+      ...(options.headers || {}),
+    },
+  });
+
+  if (response.status === 404) return null;
+  if (!response.ok) {
+    const text = await response.text();
+    throw new Error(`GitHub API failed: ${response.status} ${response.statusText}: ${text}`);
+  }
+
+  return response.json();
+}
+
+async function ensureStatusBranch() {
+  const existing = await githubApi(`/repos/${REPO}/git/ref/heads/${BRANCH}`, { write: true });
+  if (existing) return;
+
+  const source = await githubApi(`/repos/${REPO}/git/ref/heads/${DEFAULT_BRANCH}`, { write: true });
+  if (!source?.object?.sha) {
+    throw new Error(`Could not resolve source branch ${DEFAULT_BRANCH}.`);
+  }
+
+  await githubApi(`/repos/${REPO}/git/refs`, {
+    method: "POST",
+    write: true,
+    body: JSON.stringify({
+      ref: `refs/heads/${BRANCH}`,
+      sha: source.object.sha,
+    }),
+  });
+}
+
 export async function writeControl(control) {
   const token = statusToken({ write: true });
   if (!token) {
     throw new Error("GITHUB_STATUS_WRITE_TOKEN is not configured.");
   }
 
+  await ensureStatusBranch();
   const sha = await getFileSha("control.json");
   const response = await fetch(`https://api.github.com/repos/${REPO}/contents/control.json`, {
     method: "PUT",

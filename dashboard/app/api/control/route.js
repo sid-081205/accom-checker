@@ -13,14 +13,20 @@ export async function POST(request) {
   const action = formData.get("action");
   const enabled = action === "start";
 
-  await writeControl({
-    enabled,
-    updatedAt: new Date().toISOString(),
-    updatedBy: "dashboard",
-  });
+  try {
+    await writeControl({
+      enabled,
+      updatedAt: new Date().toISOString(),
+      updatedBy: "dashboard",
+    });
 
-  if (enabled) {
-    await dispatchChecker();
+    if (enabled) {
+      await dispatchChecker();
+    }
+  } catch (error) {
+    const url = new URL("/", request.url);
+    url.searchParams.set("controlError", error.message.slice(0, 180));
+    return NextResponse.redirect(url, 303);
   }
 
   return NextResponse.redirect(new URL("/", request.url), 303);
