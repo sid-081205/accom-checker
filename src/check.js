@@ -292,6 +292,19 @@ async function automateLogin(driver) {
 
   await driver.get(START_URL);
   await clickButtonByText(driver, "login", 8000).catch(() => false);
+  if (await loggedInAccommodationVisible(driver).catch(() => false)) {
+    await saveCookies(driver);
+    await writeStatus({
+      state: "running",
+      message: "LSE session is already active; continuing availability check.",
+    });
+    await appendEvent({
+      state: "running",
+      message: "LSE session is already active.",
+    });
+    return;
+  }
+
   const clickedStaff = await clickIfVisible(driver, By.css("#staff"), 8000);
   if (!clickedStaff && !(await driver.getCurrentUrl()).includes("login.microsoftonline.com")) {
     const debug = await pageDebug(driver);
