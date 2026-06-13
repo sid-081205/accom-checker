@@ -35,7 +35,12 @@ async function githubRequest(filePath, options = {}) {
 }
 
 async function readJsonFile(filePath, fallback) {
-  return githubRequest(filePath, { fallback });
+  try {
+    return await githubRequest(filePath, { fallback });
+  } catch (error) {
+    console.warn(error.message);
+    return fallback;
+  }
 }
 
 async function getFileSha(filePath) {
