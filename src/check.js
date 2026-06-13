@@ -11,6 +11,7 @@ const START_URL =
   "https://lsestudentaccommodation.lse.ac.uk/Pages/EN/Lander.aspx?wf=Hub";
 const NO_AVAILABILITY_TEXT = "No residences currently have availability";
 const AUTH_COOKIES_PATH = path.resolve(".auth/lse-cookies.json");
+const CHROME_PROFILE_DIR = path.resolve(".auth/chrome-profile");
 const STATE_PATH = path.resolve(".state/last-result.json");
 const MFA_WAIT_MS = Number(process.env.MFA_WAIT_MS || 240000);
 
@@ -39,11 +40,17 @@ async function saveCookies(driver) {
 }
 
 async function createDriver() {
+  await fs.mkdir(CHROME_PROFILE_DIR, { recursive: true });
   const options = new chrome.Options();
   if (process.env.HEADLESS !== "false") {
     options.addArguments("--headless=new");
   }
-  options.addArguments("--no-sandbox", "--disable-dev-shm-usage", "--window-size=1440,1200");
+  options.addArguments(
+    "--no-sandbox",
+    "--disable-dev-shm-usage",
+    "--window-size=1440,1200",
+    `--user-data-dir=${CHROME_PROFILE_DIR}`
+  );
 
   return new Builder().forBrowser("chrome").setChromeOptions(options).build();
 }

@@ -77,10 +77,10 @@ export default async function DashboardPage({ searchParams }) {
               : "Scheduled checks exit without opening LSE."}
           </p>
           <form action="/api/control" method="post" className="button-row">
-            <button name="action" value="start" type="submit">
+            <button name="action" value="start" type="submit" disabled={control.enabled}>
               Start
             </button>
-            <button className="secondary" name="action" value="stop" type="submit">
+            <button className="secondary" name="action" value="stop" type="submit" disabled={!control.enabled}>
               Stop
             </button>
           </form>

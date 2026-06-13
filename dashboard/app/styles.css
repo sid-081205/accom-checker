@@ -37,6 +37,11 @@ button {
   font-weight: 700;
 }
 
+button:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+
 input {
   width: 100%;
   border: 1px solid #334155;

@@ -1,7 +1,7 @@
 import { cookies } from "next/headers";
 import { NextResponse } from "next/server";
 import { isAuthenticated } from "../../../lib/auth";
-import { dispatchChecker, writeControl } from "../../../lib/githubStatus";
+import { dispatchChecker, writeControl, writeDashboardStatus } from "../../../lib/githubStatus";
 
 export async function POST(request) {
   const cookieStore = await cookies();
@@ -33,7 +33,18 @@ export async function POST(request) {
     });
 
     if (enabled) {
+      await writeDashboardStatus({
+        state: "starting",
+        message: "Checker was started from the dashboard. GitHub Actions run is being dispatched.",
+        updatedAt: new Date().toISOString(),
+      });
       await dispatchChecker();
+    } else {
+      await writeDashboardStatus({
+        state: "paused",
+        message: "Checker was paused from the dashboard.",
+        updatedAt: new Date().toISOString(),
+      });
     }
   } catch (error) {
     const url = new URL("/", request.url);

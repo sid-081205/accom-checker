@@ -115,6 +115,10 @@ async function ensureStatusBranch() {
 }
 
 export async function writeControl(control) {
+  await writeJsonFile("control.json", control, "Update dashboard control [skip ci]");
+}
+
+async function writeJsonFile(filePath, value, message) {
   const token = statusToken({ write: true });
   if (!token) {
     throw new Error("GITHUB_STATUS_WRITE_TOKEN is not configured.");
@@ -123,8 +127,8 @@ export async function writeControl(control) {
   await ensureStatusBranch();
 
   for (let attempt = 1; attempt <= 3; attempt += 1) {
-    const sha = await getFileSha("control.json");
-    const response = await fetch(`https://api.github.com/repos/${REPO}/contents/control.json`, {
+    const sha = await getFileSha(filePath);
+    const response = await fetch(`https://api.github.com/repos/${REPO}/contents/${filePath}`, {
       method: "PUT",
       headers: {
         Accept: "application/vnd.github+json",
@@ -134,8 +138,8 @@ export async function writeControl(control) {
       },
       body: JSON.stringify({
         branch: BRANCH,
-        message: "Update dashboard control [skip ci]",
-        content: Buffer.from(JSON.stringify(control, null, 2)).toString("base64"),
+        message,
+        content: Buffer.from(JSON.stringify(value, null, 2)).toString("base64"),
         ...(sha ? { sha } : {}),
       }),
     });
@@ -144,9 +148,13 @@ export async function writeControl(control) {
 
     const text = await response.text();
     if (response.status !== 409 || attempt === 3) {
-      throw new Error(`GitHub control write failed: ${response.status} ${response.statusText}: ${text}`);
+      throw new Error(`GitHub ${filePath} write failed: ${response.status} ${response.statusText}: ${text}`);
     }
   }
+}
+
+export async function writeDashboardStatus(status) {
+  await writeJsonFile("status.json", status, "Update dashboard status [skip ci]");
 }
 
 export async function dispatchChecker() {
