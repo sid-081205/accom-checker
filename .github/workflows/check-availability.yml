@@ -1,0 +1,60 @@
+name: Check LSE accommodation availability
+
+on:
+  schedule:
+    - cron: "*/5 * * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    env:
+      SMTP_HOST: ${{ secrets.SMTP_HOST }}
+      SMTP_PORT: ${{ secrets.SMTP_PORT }}
+      SMTP_SECURE: ${{ secrets.SMTP_SECURE }}
+      SMTP_USER: ${{ secrets.SMTP_USER }}
+      SMTP_PASS: ${{ secrets.SMTP_PASS }}
+      EMAIL_FROM: ${{ secrets.EMAIL_FROM }}
+      EMAIL_TO: ${{ secrets.EMAIL_TO }}
+      HEADLESS: "true"
+      SEND_ON_EVERY_HIT: "false"
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Install Chromium
+        run: npx playwright install --with-deps chromium
+
+      - name: Restore previous check state
+        uses: actions/cache@v4
+        with:
+          path: .state
+          key: availability-state-${{ github.run_id }}
+          restore-keys: |
+            availability-state-
+
+      - name: Restore LSE login session
+        env:
+          LSE_STORAGE_STATE_B64: ${{ secrets.LSE_STORAGE_STATE_B64 }}
+        run: |
+          test -n "$LSE_STORAGE_STATE_B64"
+          mkdir -p .auth
+          printf "%s" "$LSE_STORAGE_STATE_B64" | base64 --decode > .auth/lse-storage-state.json
+
+      - name: Check availability
+        run: npm run check
