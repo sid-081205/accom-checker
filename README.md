@@ -81,7 +81,7 @@ The Vercel dashboard lives in `dashboard/`. It shows:
 - Microsoft Authenticator number when approval is needed
 - recent status events
 
-Deploy by importing this repo into Vercel. The root `vercel.json` builds the `dashboard/` app.
+Deploy by importing this repo into Vercel and setting the Vercel project root directory to `dashboard`.
 
 Create a Vercel KV store and add these Vercel environment variables:
 
