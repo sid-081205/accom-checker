@@ -1,0 +1,19 @@
+{
+  "name": "accom-checker",
+  "version": "1.0.0",
+  "description": "Checks LSE accommodation availability and emails when rooms appear.",
+  "main": "src/check.js",
+  "scripts": {
+    "check": "node src/check.js",
+    "login": "node src/login.js"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "dependencies": {
+    "dotenv": "^17.4.2",
+    "nodemailer": "^8.0.11",
+    "playwright": "^1.60.0"
+  }
+}
