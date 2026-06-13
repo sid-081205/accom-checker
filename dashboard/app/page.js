@@ -23,6 +23,7 @@ function stateLabel(state) {
     needs_email_code: "Needs Email Code",
     login_failed: "Login Failed",
     paused: "Paused",
+    retrying: "Retrying",
     error: "Error",
   };
   return labels[state] || "Unknown";

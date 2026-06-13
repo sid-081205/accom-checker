@@ -14,6 +14,7 @@ const AUTH_COOKIES_PATH = path.resolve(".auth/lse-cookies.json");
 const CHROME_PROFILE_DIR = path.resolve(".auth/chrome-profile");
 const STATE_PATH = path.resolve(".state/last-result.json");
 const MFA_WAIT_MS = Number(process.env.MFA_WAIT_MS || 240000);
+const CHECK_ATTEMPTS = Number(process.env.CHECK_ATTEMPTS || 3);
 
 async function exists(filePath) {
   try {
@@ -56,7 +57,8 @@ async function createDriver() {
 }
 
 async function bodyText(driver) {
-  return driver.findElement(By.css("body")).getText();
+  const body = await driver.wait(until.elementLocated(By.css("body")), 20000);
+  return body.getText();
 }
 
 async function pageDebug(driver) {
@@ -527,29 +529,13 @@ async function sendOperationalEmail(subject, text) {
   await sendMail(subject, text);
 }
 
-async function main() {
-  const control = await readControl();
-  if (!control.enabled) {
-    const message = "Checker is paused from the dashboard.";
-    await writeStatus({
-      state: "paused",
-      message,
-      control,
-    });
-    await appendEvent({
-      state: "paused",
-      message,
-    });
-    console.log(message);
-    return;
-  }
-
+async function performCheckAttempt(attempt) {
   const driver = await createDriver();
 
   try {
     await writeStatus({
       state: "starting",
-      message: "GitHub Actions checker run started.",
+      message: `GitHub Actions checker run started. Attempt ${attempt}/${CHECK_ATTEMPTS}.`,
     });
 
     await loadCookies(driver);
@@ -621,6 +607,71 @@ async function main() {
   } finally {
     await driver.quit();
   }
+}
+
+function isRetryableError(error) {
+  const message = `${error?.message || ""}\n${error?.stack || ""}`;
+  return [
+    "no such element",
+    "stale element",
+    "timeout",
+    "timed out",
+    "chrome not reachable",
+    "target window already closed",
+    "net::",
+    "detached",
+  ].some((needle) => message.toLowerCase().includes(needle));
+}
+
+async function sleep(ms) {
+  await new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function main() {
+  const control = await readControl();
+  if (!control.enabled) {
+    const message = "Checker is paused from the dashboard.";
+    await writeStatus({
+      state: "paused",
+      message,
+      control,
+    });
+    await appendEvent({
+      state: "paused",
+      message,
+    });
+    console.log(message);
+    return;
+  }
+
+  let lastError;
+  for (let attempt = 1; attempt <= CHECK_ATTEMPTS; attempt += 1) {
+    try {
+      await performCheckAttempt(attempt);
+      return;
+    } catch (error) {
+      lastError = error;
+      const retryable = isRetryableError(error);
+      if (!retryable || attempt === CHECK_ATTEMPTS) {
+        throw error;
+      }
+
+      const message = `Attempt ${attempt}/${CHECK_ATTEMPTS} failed with a retryable browser/page error; retrying with a fresh browser. ${error.message}`;
+      console.warn(message);
+      await writeStatus({
+        state: "retrying",
+        message,
+        error: error.stack || error.message,
+      });
+      await appendEvent({
+        state: "retrying",
+        message,
+      });
+      await sleep(5000 * attempt);
+    }
+  }
+
+  throw lastError;
 }
 
 main().catch(async (error) => {
