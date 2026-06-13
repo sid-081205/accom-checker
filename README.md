@@ -53,7 +53,47 @@ The script follows the current booking flow:
 - Confirms the pre-filled `About You` page if it appears.
 - Checks the `Select your room type` availability page.
 
-## Schedule
+## GitHub Actions
+
+The repository includes a scheduled workflow at `.github/workflows/check-availability.yml`. It runs every 5 minutes, restores cached Selenium cookies, checks availability, and sends an email only when the no-availability message disappears.
+
+Set these GitHub Secrets:
+
+```sh
+gh secret set LSE_EMAIL --body "your-lse-email"
+gh secret set LSE_PASSWORD --body "your-lse-password"
+gh secret set KV_REST_API_URL --body "your-vercel-kv-rest-api-url"
+gh secret set KV_REST_API_TOKEN --body "your-vercel-kv-rest-api-token"
+```
+
+The SMTP secrets are also required: `SMTP_HOST`, `SMTP_PORT`, `SMTP_SECURE`, `SMTP_USER`, `SMTP_PASS`, `EMAIL_FROM`, and `EMAIL_TO`.
+
+`LSE_COOKIES_B64` is optional once `LSE_EMAIL` and `LSE_PASSWORD` are configured. If cookies expire, Selenium starts the Microsoft login flow, writes the Authenticator number to the dashboard, emails the same number, waits for approval, then caches refreshed cookies for later runs.
+
+## Dashboard
+
+The Vercel dashboard lives in `dashboard/`. It shows:
+
+- latest checker state
+- last run time
+- workflow run link
+- room count and latest summary
+- Microsoft Authenticator number when approval is needed
+- recent status events
+
+Deploy by importing this repo into Vercel. The root `vercel.json` builds the `dashboard/` app.
+
+Create a Vercel KV store and add these Vercel environment variables:
+
+```sh
+DASHBOARD_PASSWORD=choose-a-dashboard-password
+KV_REST_API_URL=your-vercel-kv-rest-api-url
+KV_REST_API_TOKEN=your-vercel-kv-rest-api-token
+```
+
+Use the same `KV_REST_API_URL` and `KV_REST_API_TOKEN` values as GitHub Secrets so the checker can write status and the dashboard can read it.
+
+## Local Schedule
 
 On macOS, run this every few minutes with cron:
 

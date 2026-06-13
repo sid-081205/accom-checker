@@ -11,7 +11,7 @@ permissions:
 jobs:
   check:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
 
     env:
       SMTP_HOST: ${{ secrets.SMTP_HOST }}
@@ -23,6 +23,11 @@ jobs:
       EMAIL_TO: ${{ secrets.EMAIL_TO }}
       HEADLESS: "true"
       SEND_ON_EVERY_HIT: "false"
+      MFA_WAIT_MS: "240000"
+      LSE_EMAIL: ${{ secrets.LSE_EMAIL }}
+      LSE_PASSWORD: ${{ secrets.LSE_PASSWORD }}
+      KV_REST_API_URL: ${{ secrets.KV_REST_API_URL }}
+      KV_REST_API_TOKEN: ${{ secrets.KV_REST_API_TOKEN }}
 
     steps:
       - name: Check out repository
@@ -48,13 +53,22 @@ jobs:
           restore-keys: |
             availability-state-
 
-      - name: Restore LSE login session
+      - name: Restore cached LSE login session
+        uses: actions/cache@v4
+        with:
+          path: .auth
+          key: lse-auth-${{ github.run_id }}
+          restore-keys: |
+            lse-auth-
+
+      - name: Seed LSE login session from secret
         env:
           LSE_COOKIES_B64: ${{ secrets.LSE_COOKIES_B64 }}
         run: |
-          test -n "$LSE_COOKIES_B64"
           mkdir -p .auth
-          printf "%s" "$LSE_COOKIES_B64" | base64 --decode > .auth/lse-cookies.json
+          if [ ! -f .auth/lse-cookies.json ] && [ -n "$LSE_COOKIES_B64" ]; then
+            printf "%s" "$LSE_COOKIES_B64" | base64 --decode > .auth/lse-cookies.json
+          fi
 
       - name: Check availability
         run: npm run check

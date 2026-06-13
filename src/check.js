@@ -5,12 +5,14 @@ const path = require("path");
 const nodemailer = require("nodemailer");
 const { Builder, By, until } = require("selenium-webdriver");
 const chrome = require("selenium-webdriver/chrome");
+const { appendEvent, writeStatus } = require("./status");
 
 const START_URL =
   "https://lsestudentaccommodation.lse.ac.uk/Pages/EN/Lander.aspx?wf=Hub";
 const NO_AVAILABILITY_TEXT = "No residences currently have availability";
 const AUTH_COOKIES_PATH = path.resolve(".auth/lse-cookies.json");
 const STATE_PATH = path.resolve(".state/last-result.json");
+const MFA_WAIT_MS = Number(process.env.MFA_WAIT_MS || 240000);
 
 async function exists(filePath) {
   try {
@@ -31,6 +33,11 @@ async function writeJson(filePath, data) {
   await fs.writeFile(filePath, JSON.stringify(data, null, 2));
 }
 
+async function saveCookies(driver) {
+  const cookies = await driver.manage().getCookies();
+  await writeJson(AUTH_COOKIES_PATH, cookies);
+}
+
 async function createDriver() {
   const options = new chrome.Options();
   if (process.env.HEADLESS !== "false") {
@@ -47,6 +54,8 @@ async function bodyText(driver) {
 
 async function loadCookies(driver) {
   await driver.get(START_URL);
+  if (!(await exists(AUTH_COOKIES_PATH))) return false;
+
   const cookies = await readJson(AUTH_COOKIES_PATH);
   for (const cookie of cookies) {
     const seleniumCookie = { ...cookie };
@@ -55,6 +64,7 @@ async function loadCookies(driver) {
     }
     await driver.manage().addCookie(seleniumCookie);
   }
+  return true;
 }
 
 async function clickIfVisible(driver, locator, timeout = 5000) {
@@ -67,6 +77,25 @@ async function clickIfVisible(driver, locator, timeout = 5000) {
   } catch {
     return false;
   }
+}
+
+async function typeIfPresent(driver, locator, value, timeout = 10000) {
+  const element = await driver.wait(until.elementLocated(locator), timeout);
+  await driver.wait(until.elementIsVisible(element), timeout);
+  await element.clear().catch(() => {});
+  await element.sendKeys(value);
+  return element;
+}
+
+async function clickButtonByText(driver, text, timeout = 10000) {
+  const lower = text.toLowerCase();
+  return clickIfVisible(
+    driver,
+    By.xpath(
+      `//*[self::button or self::input or self::a][contains(translate(normalize-space(@value), 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), '${lower}') or contains(translate(normalize-space(.), 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), '${lower}')]`
+    ),
+    timeout
+  );
 }
 
 async function chooseWestminsterNo(driver) {
@@ -87,11 +116,129 @@ async function chooseWestminsterNo(driver) {
   });
 }
 
+async function accommodationLoginVisible(driver) {
+  const text = await bodyText(driver);
+  return text.includes("Please login") || text.includes("Login");
+}
+
+async function loggedInAccommodationVisible(driver) {
+  const text = await bodyText(driver);
+  return (
+    text.includes("Select your Year of Stay") ||
+    text.includes("Continue Booking") ||
+    text.includes("Select your room type") ||
+    text.includes("Available Rooms")
+  );
+}
+
+async function extractMfaCode(driver) {
+  return driver.executeScript(() => {
+    const selectors = [
+      "[id*='displaySign']",
+      "[id*='DisplaySign']",
+      "[data-testid*='display']",
+      "[class*='displaySign']",
+    ];
+
+    for (const selector of selectors) {
+      const element = document.querySelector(selector);
+      const match = element?.innerText?.match(/\b\d{2,3}\b/);
+      if (match) return match[0];
+    }
+
+    const visibleText = document.body.innerText || "";
+    const lines = visibleText
+      .split("\n")
+      .map((line) => line.trim())
+      .filter(Boolean);
+    const numberLine = lines.find((line) => /^\d{2,3}$/.test(line));
+    if (numberLine) return numberLine;
+
+    const nearby = visibleText.match(/(?:number|code)[^\d]*(\d{2,3})/i);
+    return nearby?.[1] || null;
+  });
+}
+
+async function waitForMfaApproval(driver, code) {
+  const startedAt = Date.now();
+  while (Date.now() - startedAt < MFA_WAIT_MS) {
+    if (await loggedInAccommodationVisible(driver).catch(() => false)) {
+      return;
+    }
+
+    await clickButtonByText(driver, "yes", 1000).catch(() => false);
+    await driver.sleep(3000);
+  }
+
+  throw new Error(`Timed out waiting for Microsoft Authenticator approval for code ${code}.`);
+}
+
+async function automateLogin(driver) {
+  const email = process.env.LSE_EMAIL;
+  const password = process.env.LSE_PASSWORD;
+  if (!email || !password) {
+    throw new Error("LSE_EMAIL and LSE_PASSWORD are required to refresh an expired login.");
+  }
+
+  await writeStatus({
+    state: "login_required",
+    message: "Saved LSE session is missing or expired; starting automated login.",
+  });
+  await appendEvent({
+    state: "login_required",
+    message: "Saved LSE session is missing or expired; starting automated login.",
+  });
+
+  await driver.get(START_URL);
+  await clickButtonByText(driver, "login", 8000).catch(() => false);
+
+  await typeIfPresent(
+    driver,
+    By.css("input[type='email'], input[name='loginfmt'], input#i0116"),
+    email
+  );
+  await clickButtonByText(driver, "next");
+
+  await typeIfPresent(
+    driver,
+    By.css("input[type='password'], input[name='passwd'], input#i0118"),
+    password
+  );
+  await clickButtonByText(driver, "sign in");
+
+  const code = await driver.wait(async () => extractMfaCode(driver), 30000);
+  const message = `Microsoft Authenticator approval required. Enter/approve number ${code}.`;
+  await writeStatus({
+    state: "needs_mfa",
+    message,
+    mfaCode: code,
+  });
+  await appendEvent({
+    state: "needs_mfa",
+    message,
+  });
+  await sendOperationalEmail("LSE accommodation checker needs Authenticator approval", message);
+
+  await waitForMfaApproval(driver, code);
+  await clickButtonByText(driver, "yes", 5000).catch(() => false);
+  await driver.wait(async () => loggedInAccommodationVisible(driver), 60000);
+  await saveCookies(driver);
+
+  await writeStatus({
+    state: "running",
+    message: "LSE login refreshed successfully; continuing availability check.",
+  });
+  await appendEvent({
+    state: "running",
+    message: "LSE login refreshed successfully.",
+  });
+}
+
 async function reachAvailabilityPage(driver) {
   await driver.get(START_URL);
 
   let text = await bodyText(driver);
-  if (text.includes("Please login") || text.includes("Login")) {
+  if (await accommodationLoginVisible(driver)) {
     throw new Error(
       "Not logged in. Run `npm run login`, complete LSE login, then run the checker again."
     );
@@ -153,7 +300,7 @@ function fingerprint(result) {
   return `changed-page:${result.pageSummary}`;
 }
 
-function formatEmail(result) {
+function formatAvailabilityEmail(result) {
   const roomDetails =
     result.rooms.length > 0
       ? result.rooms
@@ -176,7 +323,7 @@ function formatEmail(result) {
   ].join("\n");
 }
 
-async function sendEmail(result) {
+async function sendMail(subject, text) {
   const required = ["SMTP_HOST", "SMTP_PORT", "SMTP_USER", "SMTP_PASS", "EMAIL_TO"];
   const missing = required.filter((key) => !process.env[key]);
   if (missing.length > 0) {
@@ -196,21 +343,37 @@ async function sendEmail(result) {
   await transporter.sendMail({
     from: process.env.EMAIL_FROM || process.env.SMTP_USER,
     to: process.env.EMAIL_TO,
-    subject: "Possible LSE accommodation availability",
-    text: formatEmail(result),
+    subject,
+    text,
   });
 }
 
-async function main() {
-  if (!(await exists(AUTH_COOKIES_PATH))) {
-    throw new Error("Missing saved login. Run `npm run login` first.");
-  }
+async function sendAvailabilityEmail(result) {
+  await sendMail("Possible LSE accommodation availability", formatAvailabilityEmail(result));
+}
 
+async function sendOperationalEmail(subject, text) {
+  await sendMail(subject, text);
+}
+
+async function main() {
   const driver = await createDriver();
 
   try {
+    await writeStatus({
+      state: "starting",
+      message: "GitHub Actions checker run started.",
+    });
+
     await loadCookies(driver);
-    await reachAvailabilityPage(driver);
+    try {
+      await reachAvailabilityPage(driver);
+    } catch (error) {
+      if (!error.message.includes("Not logged in")) throw error;
+      await automateLogin(driver);
+      await reachAvailabilityPage(driver);
+    }
+
     const result = await extractAvailability(driver);
     const currentFingerprint = fingerprint(result);
     const previous = await readJson(STATE_PATH);
@@ -223,6 +386,18 @@ async function main() {
     });
 
     if (result.noAvailability) {
+      await writeStatus({
+        state: "ok",
+        message: "Checker ran successfully. No residences currently have availability.",
+        checkedAt: result.checkedAt,
+        noAvailability: true,
+        roomCount: result.rooms.length,
+        summary: result.pageSummary,
+      });
+      await appendEvent({
+        state: "ok",
+        message: "No availability found.",
+      });
       console.log(`[${result.checkedAt}] No availability.`);
       return;
     }
@@ -230,18 +405,47 @@ async function main() {
     const alreadyAlerted =
       previous?.fingerprint === currentFingerprint && process.env.SEND_ON_EVERY_HIT !== "true";
     if (alreadyAlerted) {
+      await writeStatus({
+        state: "availability_found",
+        message: "Availability signal is still present; duplicate email skipped.",
+        checkedAt: result.checkedAt,
+        noAvailability: false,
+        roomCount: result.rooms.length,
+        summary: result.pageSummary,
+      });
       console.log(`[${result.checkedAt}] Availability signal unchanged; email skipped.`);
       return;
     }
 
-    await sendEmail(result);
+    await sendAvailabilityEmail(result);
+    await writeStatus({
+      state: "availability_found",
+      message: "Availability signal found and email sent.",
+      checkedAt: result.checkedAt,
+      noAvailability: false,
+      roomCount: result.rooms.length,
+      summary: result.pageSummary,
+    });
+    await appendEvent({
+      state: "availability_found",
+      message: "Availability signal found and email sent.",
+    });
     console.log(`[${result.checkedAt}] Availability signal found; email sent.`);
   } finally {
     await driver.quit();
   }
 }
 
-main().catch((error) => {
+main().catch(async (error) => {
+  await writeStatus({
+    state: error.message.includes("LSE_EMAIL") ? "login_failed" : "error",
+    message: error.message,
+    error: error.stack || error.message,
+  });
+  await appendEvent({
+    state: error.message.includes("LSE_EMAIL") ? "login_failed" : "error",
+    message: error.message,
+  });
   console.error(error.message);
   process.exitCode = 1;
 });

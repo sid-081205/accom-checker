@@ -1,0 +1,20 @@
+{
+  "name": "accom-checker-dashboard",
+  "version": "1.0.0",
+  "description": "Password-protected Vercel status dashboard for the LSE accommodation checker.",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "next": "^16.2.9",
+    "react": "^19.2.7",
+    "react-dom": "^19.2.7"
+  }
+}

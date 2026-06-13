@@ -1,6 +1,9 @@
 node_modules/
+.next/
+.vercel/
 .env
 .auth/
 .state/
 *.log
 .DS_Store
+.vercel

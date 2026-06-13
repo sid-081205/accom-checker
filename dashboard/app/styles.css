@@ -1,0 +1,181 @@
+:root {
+  color-scheme: light dark;
+  font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI",
+    sans-serif;
+  background: #0f172a;
+  color: #e5e7eb;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  background:
+    radial-gradient(circle at top left, rgba(59, 130, 246, 0.2), transparent 32rem),
+    #0f172a;
+}
+
+a {
+  color: #93c5fd;
+}
+
+button,
+input {
+  font: inherit;
+}
+
+button {
+  cursor: pointer;
+  border: 0;
+  border-radius: 0.75rem;
+  padding: 0.85rem 1rem;
+  background: #2563eb;
+  color: white;
+  font-weight: 700;
+}
+
+input {
+  width: 100%;
+  border: 1px solid #334155;
+  border-radius: 0.75rem;
+  padding: 0.85rem 1rem;
+  background: #020617;
+  color: #e5e7eb;
+}
+
+pre {
+  white-space: pre-wrap;
+  word-break: break-word;
+  margin: 0;
+  color: #cbd5e1;
+}
+
+.shell {
+  width: min(1100px, calc(100% - 2rem));
+  margin: 0 auto;
+  padding: 2rem 0;
+}
+
+.auth-shell {
+  display: grid;
+  min-height: 100vh;
+  place-items: center;
+}
+
+.auth-card {
+  width: min(440px, 100%);
+}
+
+.header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+  margin-bottom: 1.5rem;
+}
+
+.card {
+  border: 1px solid rgba(148, 163, 184, 0.2);
+  border-radius: 1.25rem;
+  background: rgba(15, 23, 42, 0.76);
+  box-shadow: 0 20px 80px rgba(0, 0, 0, 0.25);
+  padding: 1.25rem;
+}
+
+.hero {
+  margin-bottom: 1rem;
+}
+
+.hero.good {
+  border-color: rgba(34, 197, 94, 0.55);
+}
+
+.hero.warn {
+  border-color: rgba(245, 158, 11, 0.65);
+}
+
+.hero.bad {
+  border-color: rgba(239, 68, 68, 0.65);
+}
+
+.grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 1rem;
+  margin-bottom: 1rem;
+}
+
+.stack {
+  display: grid;
+  gap: 0.75rem;
+}
+
+.eyebrow {
+  margin: 0 0 0.5rem;
+  color: #93c5fd;
+  font-size: 0.78rem;
+  font-weight: 800;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.muted {
+  color: #94a3b8;
+}
+
+.secondary {
+  background: #1e293b;
+}
+
+.alert {
+  border-radius: 0.75rem;
+  padding: 0.75rem 1rem;
+}
+
+.error {
+  background: rgba(239, 68, 68, 0.15);
+  color: #fecaca;
+}
+
+.mfa-code {
+  font-size: clamp(2.5rem, 9vw, 5rem);
+  line-height: 1;
+  margin: 0.25rem 0;
+}
+
+.events {
+  list-style: none;
+  display: grid;
+  gap: 0.85rem;
+  margin: 0;
+  padding: 0;
+}
+
+.events li {
+  border-top: 1px solid rgba(148, 163, 184, 0.16);
+  padding-top: 0.85rem;
+}
+
+.events span {
+  display: block;
+  color: #94a3b8;
+  font-size: 0.9rem;
+}
+
+.events p {
+  margin: 0.25rem 0 0;
+}
+
+@media (max-width: 760px) {
+  .header,
+  .grid {
+    grid-template-columns: 1fr;
+  }
+
+  .header {
+    display: grid;
+  }
+}
