@@ -52,6 +52,20 @@ async function bodyText(driver) {
   return driver.findElement(By.css("body")).getText();
 }
 
+async function pageDebug(driver) {
+  const text = await bodyText(driver).catch(() => "");
+  return {
+    url: await driver.getCurrentUrl().catch(() => "unknown"),
+    title: await driver.getTitle().catch(() => "unknown"),
+    text: text
+      .split("\n")
+      .map((line) => line.trim())
+      .filter(Boolean)
+      .slice(0, 25)
+      .join(" | "),
+  };
+}
+
 async function loadCookies(driver) {
   await driver.get(START_URL);
   if (!(await exists(AUTH_COOKIES_PATH))) return false;
@@ -289,7 +303,14 @@ async function reachAvailabilityPage(driver) {
     );
   }
 
-  await driver.wait(async () => (await bodyText(driver)).includes("Select your room type"), 15000);
+  try {
+    await driver.wait(async () => (await bodyText(driver)).includes("Select your room type"), 15000);
+  } catch (error) {
+    const debug = await pageDebug(driver);
+    throw new Error(
+      `Timed out waiting for availability page. URL: ${debug.url}. Title: ${debug.title}. Visible text: ${debug.text}`
+    );
+  }
 }
 
 async function extractAvailability(driver) {
