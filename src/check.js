@@ -119,21 +119,57 @@ async function clickButtonByText(driver, text, timeout = 10000) {
 }
 
 async function chooseWestminsterNo(driver) {
-  await driver.executeScript(() => {
+  return driver.executeScript(() => {
     const labels = [...document.querySelectorAll("label")];
     const noLabel = labels.find((label) => label.textContent.trim() === "No");
-    if (!noLabel) return;
+    if (!noLabel) return false;
 
     const input =
       noLabel.control ||
       noLabel.previousElementSibling ||
       document.getElementById(noLabel.getAttribute("for"));
     if (input) {
-      input.checked = true;
+      input.scrollIntoView({ block: "center" });
+      input.click();
+      if ("checked" in input) input.checked = true;
+      input.dispatchEvent(new Event("input", { bubbles: true }));
       input.dispatchEvent(new Event("change", { bubbles: true }));
-      input.dispatchEvent(new Event("click", { bubbles: true }));
+      return true;
     }
+
+    noLabel.scrollIntoView({ block: "center" });
+    noLabel.click();
+    return true;
   });
+}
+
+async function continueFromWestminsterQuestion(driver) {
+  const selected = await chooseWestminsterNo(driver);
+  if (!selected) {
+    throw new Error("Could not select No on the Westminster Bridge question.");
+  }
+
+  await driver.sleep(500);
+  const continued = await driver.executeScript(() => {
+    const candidates = [
+      ...document.querySelectorAll("input[type='submit'], button, a"),
+    ];
+    const control = candidates.find((candidate) => {
+      const text = `${candidate.value || ""} ${candidate.innerText || ""}`.trim().toLowerCase();
+      return text.includes("continue");
+    });
+
+    if (!control) return false;
+    control.scrollIntoView({ block: "center" });
+    control.click();
+    return true;
+  });
+
+  if (!continued) {
+    throw new Error("Could not click Continue on the Westminster Bridge question.");
+  }
+
+  await driver.sleep(2000);
 }
 
 async function accommodationLoginVisible(driver) {
@@ -288,11 +324,7 @@ async function reachAvailabilityPage(driver) {
 
   text = await bodyText(driver);
   if (text.includes("Would you like to book a room in urbanest Westminster Bridge")) {
-    await chooseWestminsterNo(driver);
-    await clickIfVisible(
-      driver,
-      By.xpath("//button[contains(translate(normalize-space(.), 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'continue')]")
-    );
+    await continueFromWestminsterQuestion(driver);
   }
 
   text = await bodyText(driver);
