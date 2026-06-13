@@ -62,13 +62,13 @@ Set these GitHub Secrets:
 ```sh
 gh secret set LSE_EMAIL --body "your-lse-email"
 gh secret set LSE_PASSWORD --body "your-lse-password"
-gh secret set KV_REST_API_URL --body "your-vercel-kv-rest-api-url"
-gh secret set KV_REST_API_TOKEN --body "your-vercel-kv-rest-api-token"
 ```
 
 The SMTP secrets are also required: `SMTP_HOST`, `SMTP_PORT`, `SMTP_SECURE`, `SMTP_USER`, `SMTP_PASS`, `EMAIL_FROM`, and `EMAIL_TO`.
 
 `LSE_COOKIES_B64` is optional once `LSE_EMAIL` and `LSE_PASSWORD` are configured. If cookies expire, Selenium starts the Microsoft login flow, writes the Authenticator number to the dashboard, emails the same number, waits for approval, then caches refreshed cookies for later runs.
+
+Checker status is written for free to `status.json` and `events.json` on the repo's `status` branch. The workflow uses GitHub's built-in `GITHUB_TOKEN` for these writes.
 
 ## Dashboard
 
@@ -83,15 +83,16 @@ The Vercel dashboard lives in `dashboard/`. It shows:
 
 Deploy by importing this repo into Vercel and setting the Vercel project root directory to `dashboard`.
 
-Create a Vercel KV store and add these Vercel environment variables:
+Add these Vercel environment variables:
 
 ```sh
 DASHBOARD_PASSWORD=choose-a-dashboard-password
-KV_REST_API_URL=your-vercel-kv-rest-api-url
-KV_REST_API_TOKEN=your-vercel-kv-rest-api-token
+GITHUB_STATUS_TOKEN=github-token-with-read-only-contents-access
+GITHUB_STATUS_REPO=sid-081205/accom-checker
+GITHUB_STATUS_BRANCH=status
 ```
 
-Use the same `KV_REST_API_URL` and `KV_REST_API_TOKEN` values as GitHub Secrets so the checker can write status and the dashboard can read it.
+`GITHUB_STATUS_TOKEN` only needs read-only Contents access to this private repo. It lets the Vercel dashboard read `status.json` and `events.json` from the `status` branch.
 
 ## Local Schedule
 

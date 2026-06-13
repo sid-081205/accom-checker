@@ -6,7 +6,11 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
+
+concurrency:
+  group: lse-accommodation-checker
+  cancel-in-progress: false
 
 jobs:
   check:
@@ -26,8 +30,7 @@ jobs:
       MFA_WAIT_MS: "240000"
       LSE_EMAIL: ${{ secrets.LSE_EMAIL }}
       LSE_PASSWORD: ${{ secrets.LSE_PASSWORD }}
-      KV_REST_API_URL: ${{ secrets.KV_REST_API_URL }}
-      KV_REST_API_TOKEN: ${{ secrets.KV_REST_API_TOKEN }}
+      GITHUB_TOKEN: ${{ github.token }}
 
     steps:
       - name: Check out repository
