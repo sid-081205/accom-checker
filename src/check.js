@@ -71,7 +71,13 @@ async function clickIfVisible(driver, locator, timeout = 5000) {
   try {
     const element = await driver.wait(until.elementLocated(locator), timeout);
     await driver.wait(until.elementIsVisible(element), timeout);
-    await element.click();
+    await driver.executeScript("arguments[0].scrollIntoView({ block: 'center' });", element);
+    await driver.sleep(250);
+    try {
+      await element.click();
+    } catch {
+      await driver.executeScript("arguments[0].click();", element);
+    }
     await driver.sleep(1000);
     return true;
   } catch {
@@ -191,6 +197,7 @@ async function automateLogin(driver) {
 
   await driver.get(START_URL);
   await clickButtonByText(driver, "login", 8000).catch(() => false);
+  await clickIfVisible(driver, By.css("#staff"), 8000);
 
   await typeIfPresent(
     driver,
