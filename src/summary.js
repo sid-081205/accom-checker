@@ -3,11 +3,12 @@ require("dotenv").config();
 const nodemailer = require("nodemailer");
 
 const STATUS_BRANCH = process.env.STATUS_BRANCH || "status";
+const CHECK_WORKFLOW = "check-availability.yml";
 
-async function githubRequest(route) {
+async function githubRequest(route, { raw = false } = {}) {
   const response = await fetch(`https://api.github.com${route}`, {
     headers: {
-      Accept: "application/vnd.github.raw+json",
+      Accept: raw ? "application/vnd.github.raw+json" : "application/vnd.github+json",
       Authorization: `Bearer ${process.env.GITHUB_TOKEN}`,
       "X-GitHub-Api-Version": "2022-11-28",
     },
@@ -27,9 +28,32 @@ async function readStatusFile(filePath, fallback) {
 
   return (
     (await githubRequest(
-      `/repos/${process.env.GITHUB_REPOSITORY}/contents/${filePath}?ref=${STATUS_BRANCH}`
+      `/repos/${process.env.GITHUB_REPOSITORY}/contents/${filePath}?ref=${STATUS_BRANCH}`,
+      { raw: true }
     )) || fallback
   );
+}
+
+async function readTodayWorkflowRuns() {
+  if (!process.env.GITHUB_TOKEN || !process.env.GITHUB_REPOSITORY) return [];
+
+  const today = londonDate(new Date());
+  const runs = [];
+
+  for (let page = 1; page <= 5; page += 1) {
+    const payload = await githubRequest(
+      `/repos/${process.env.GITHUB_REPOSITORY}/actions/workflows/${CHECK_WORKFLOW}/runs?event=workflow_dispatch&per_page=100&page=${page}`
+    );
+    const pageRuns = payload?.workflow_runs || [];
+    if (pageRuns.length === 0) break;
+
+    runs.push(...pageRuns.filter((run) => londonDate(run.created_at) === today));
+
+    const hasOlderRuns = pageRuns.some((run) => londonDate(run.created_at) !== today);
+    if (hasOlderRuns) break;
+  }
+
+  return runs;
 }
 
 function londonDate(value) {
@@ -71,23 +95,32 @@ async function sendMail(subject, text) {
 }
 
 async function main() {
-  const [status, events] = await Promise.all([
+  const [status, events, workflowRuns] = await Promise.all([
     readStatusFile("status.json", null),
     readStatusFile("events.json", []),
+    readTodayWorkflowRuns(),
   ]);
 
   const today = londonDate(new Date());
   const todaysEvents = events.filter((event) => londonDate(event.at) === today);
-  const runCount = todaysEvents.filter((event) =>
+  const completedCheckCount = todaysEvents.filter((event) =>
     ["ok", "availability_found", "error", "login_failed", "needs_mfa", "needs_email_code"].includes(
       event.state
     )
   ).length;
+  const workflowDispatchCount = workflowRuns.length;
+  const completedWorkflowCount = workflowRuns.filter((run) => run.status === "completed").length;
+  const successfulWorkflowCount = workflowRuns.filter((run) => run.conclusion === "success").length;
+  const failedWorkflowCount = workflowRuns.filter((run) => run.conclusion === "failure").length;
 
   const text = [
     `Accom checker daily summary for ${today}`,
     "",
-    `Runs/events recorded: ${runCount}`,
+    `Cron/workflow jobs started: ${workflowDispatchCount}`,
+    `Cron/workflow jobs completed: ${completedWorkflowCount}`,
+    `Cron/workflow jobs succeeded: ${successfulWorkflowCount}`,
+    `Cron/workflow jobs failed: ${failedWorkflowCount}`,
+    `Checks completed by scraper: ${completedCheckCount}`,
     `No-availability checks: ${stateCount(todaysEvents, "ok")}`,
     `Availability signals: ${stateCount(todaysEvents, "availability_found")}`,
     `Authenticator prompts: ${stateCount(todaysEvents, "needs_mfa")}`,
