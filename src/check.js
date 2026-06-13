@@ -377,10 +377,10 @@ async function reachAvailabilityPage(driver) {
 
   text = await bodyText(driver);
   if (text.includes("About You")) {
-    await clickIfVisible(
-      driver,
-      By.xpath("//button[contains(translate(normalize-space(.), 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'confirm')]")
-    );
+    const confirmed = await clickButtonByText(driver, "confirm", 8000);
+    if (!confirmed) {
+      throw new Error("Could not click Confirm on the About You page.");
+    }
   }
 
   try {
