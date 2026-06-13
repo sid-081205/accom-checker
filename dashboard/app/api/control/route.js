@@ -11,9 +11,21 @@ export async function POST(request) {
 
   const formData = await request.formData();
   const action = formData.get("action");
+  const emailCode = `${formData.get("emailCode") || ""}`.trim();
   const enabled = action === "start";
 
   try {
+    if (action === "submitEmailCode") {
+      await writeControl({
+        enabled: true,
+        emailCode,
+        emailCodeUpdatedAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+        updatedBy: "dashboard",
+      });
+      return NextResponse.redirect(new URL("/", request.url), 303);
+    }
+
     await writeControl({
       enabled,
       updatedAt: new Date().toISOString(),

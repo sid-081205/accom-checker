@@ -229,6 +229,36 @@ async function waitForMfaApproval(driver, code) {
   throw new Error(`Timed out waiting for Microsoft Authenticator approval for code ${code}.`);
 }
 
+async function waitForDashboardEmailCode(promptedAt) {
+  const startedAt = Date.now();
+  while (Date.now() - startedAt < MFA_WAIT_MS) {
+    const control = await readControl();
+    const codeUpdatedAt = control.emailCodeUpdatedAt ? new Date(control.emailCodeUpdatedAt).getTime() : 0;
+    if (control.emailCode && codeUpdatedAt >= promptedAt) {
+      return control.emailCode.trim();
+    }
+    await new Promise((resolve) => setTimeout(resolve, 3000));
+  }
+
+  throw new Error("Timed out waiting for email verification code from the dashboard.");
+}
+
+async function submitEmailCode(driver, code) {
+  const input = await driver.wait(
+    until.elementLocated(
+      By.css("input[name='otc'], input#idTxtBx_SAOTCC_OTC, input[type='tel'], input[type='text']")
+    ),
+    30000
+  );
+  await driver.wait(until.elementIsVisible(input), 10000);
+  await input.clear().catch(() => {});
+  await input.sendKeys(code);
+  await clickButtonByText(driver, "verify", 5000).catch(() => false);
+  await clickButtonByText(driver, "next", 5000).catch(() => false);
+  await clickButtonByText(driver, "submit", 5000).catch(() => false);
+  await driver.sleep(3000);
+}
+
 async function automateLogin(driver) {
   const email = process.env.LSE_EMAIL;
   const password = process.env.LSE_PASSWORD;
@@ -265,8 +295,9 @@ async function automateLogin(driver) {
 
   const authText = await bodyText(driver);
   if (/email|verification code|enter code|security code/i.test(authText)) {
+    const promptedAt = Date.now();
     const message =
-      "LSE/Microsoft login is asking for an email verification code. The checker cannot read your inbox automatically, so run `npm run login` locally to refresh the session.";
+      "LSE/Microsoft login is asking for an email verification code. Enter it on the dashboard while this run is waiting.";
     await writeStatus({
       state: "needs_email_code",
       message,
@@ -276,7 +307,24 @@ async function automateLogin(driver) {
       message,
     });
     await sendOperationalEmail("LSE accommodation checker needs email verification", message);
-    throw new Error(message);
+    const emailCode = await waitForDashboardEmailCode(promptedAt);
+    await submitEmailCode(driver, emailCode);
+    await clickButtonByText(driver, "yes", 5000).catch(() => false);
+    const loggedInAfterEmailCode = await driver
+      .wait(async () => loggedInAccommodationVisible(driver), 15000)
+      .catch(() => false);
+    if (loggedInAfterEmailCode) {
+      await saveCookies(driver);
+      await writeStatus({
+        state: "running",
+        message: "LSE login refreshed successfully with email verification; continuing availability check.",
+      });
+      await appendEvent({
+        state: "running",
+        message: "LSE login refreshed successfully with email verification.",
+      });
+      return;
+    }
   }
 
   const code = await driver.wait(async () => extractMfaCode(driver), 30000);

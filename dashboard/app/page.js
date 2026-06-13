@@ -115,8 +115,15 @@ export default async function DashboardPage({ searchParams }) {
             <>
               <h3>Email code needed</h3>
               <p className="muted">
-                The checker emailed you. Run local login to enter the inbox code and refresh cookies.
+                Enter the code from your inbox while the GitHub Action is still running.
               </p>
+              <form action="/api/control" method="post" className="stack">
+                <label htmlFor="emailCode">Email verification code</label>
+                <input id="emailCode" name="emailCode" inputMode="numeric" autoComplete="one-time-code" />
+                <button name="action" value="submitEmailCode" type="submit">
+                  Submit Code
+                </button>
+              </form>
             </>
           ) : (
             <>

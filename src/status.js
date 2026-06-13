@@ -154,6 +154,8 @@ async function readControl() {
   const remote = await readRemoteJson("control.json", local || fallback);
   return {
     enabled: remote?.enabled !== false,
+    emailCode: remote?.emailCode,
+    emailCodeUpdatedAt: remote?.emailCodeUpdatedAt,
     updatedAt: remote?.updatedAt,
     updatedBy: remote?.updatedBy,
   };
