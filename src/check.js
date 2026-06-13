@@ -107,7 +107,15 @@ async function clickIfVisible(driver, locator, timeout = 5000) {
 }
 
 async function typeIfPresent(driver, locator, value, timeout = 10000) {
-  const element = await driver.wait(until.elementLocated(locator), timeout);
+  let element;
+  try {
+    element = await driver.wait(until.elementLocated(locator), timeout);
+  } catch (error) {
+    const debug = await pageDebug(driver);
+    throw new Error(
+      `Timed out waiting for input ${locator}. URL: ${debug.url}. Title: ${debug.title}. Visible text: ${debug.text}`
+    );
+  }
   await driver.wait(until.elementIsVisible(element), timeout);
   await element.clear().catch(() => {});
   await element.sendKeys(value);
@@ -284,7 +292,13 @@ async function automateLogin(driver) {
 
   await driver.get(START_URL);
   await clickButtonByText(driver, "login", 8000).catch(() => false);
-  await clickIfVisible(driver, By.css("#staff"), 8000);
+  const clickedStaff = await clickIfVisible(driver, By.css("#staff"), 8000);
+  if (!clickedStaff && !(await driver.getCurrentUrl()).includes("login.microsoftonline.com")) {
+    const debug = await pageDebug(driver);
+    throw new Error(
+      `Could not reach Microsoft sign-in from LSE identity page. URL: ${debug.url}. Title: ${debug.title}. Visible text: ${debug.text}`
+    );
+  }
 
   await typeIfPresent(
     driver,
