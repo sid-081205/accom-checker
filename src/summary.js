@@ -40,17 +40,19 @@ async function readTodayWorkflowRuns() {
   const today = londonDate(new Date());
   const runs = [];
 
-  for (let page = 1; page <= 5; page += 1) {
-    const payload = await githubRequest(
-      `/repos/${process.env.GITHUB_REPOSITORY}/actions/workflows/${CHECK_WORKFLOW}/runs?event=workflow_dispatch&per_page=100&page=${page}`
-    );
-    const pageRuns = payload?.workflow_runs || [];
-    if (pageRuns.length === 0) break;
+  for (const event of ["schedule", "workflow_dispatch"]) {
+    for (let page = 1; page <= 10; page += 1) {
+      const payload = await githubRequest(
+        `/repos/${process.env.GITHUB_REPOSITORY}/actions/workflows/${CHECK_WORKFLOW}/runs?event=${event}&per_page=100&page=${page}`
+      );
+      const pageRuns = payload?.workflow_runs || [];
+      if (pageRuns.length === 0) break;
 
-    runs.push(...pageRuns.filter((run) => londonDate(run.created_at) === today));
+      runs.push(...pageRuns.filter((run) => londonDate(run.created_at) === today));
 
-    const hasOlderRuns = pageRuns.some((run) => londonDate(run.created_at) !== today);
-    if (hasOlderRuns) break;
+      const hasOlderRuns = pageRuns.some((run) => londonDate(run.created_at) !== today);
+      if (hasOlderRuns) break;
+    }
   }
 
   return runs;

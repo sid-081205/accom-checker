@@ -1,8 +1,6 @@
 name: Send daily accommodation checker summary
 
 on:
-  schedule:
-    - cron: "55 22 * * *"
   workflow_dispatch:
 
 permissions:

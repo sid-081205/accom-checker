@@ -181,6 +181,30 @@ export async function dispatchChecker() {
   }
 }
 
+export async function dispatchSummary() {
+  const token = statusToken({ write: true });
+  if (!token) return;
+
+  const response = await fetch(
+    `https://api.github.com/repos/${REPO}/actions/workflows/daily-summary.yml/dispatches`,
+    {
+      method: "POST",
+      headers: {
+        Accept: "application/vnd.github+json",
+        Authorization: `Bearer ${token}`,
+        "Content-Type": "application/json",
+        "X-GitHub-Api-Version": "2022-11-28",
+      },
+      body: JSON.stringify({ ref: "master" }),
+    }
+  );
+
+  if (!response.ok) {
+    const text = await response.text();
+    throw new Error(`Summary dispatch failed: ${response.status} ${response.statusText}: ${text}`);
+  }
+}
+
 export async function getStatus() {
   return readJsonFile("status.json", null);
 }

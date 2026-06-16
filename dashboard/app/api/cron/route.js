@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { dispatchChecker, getControl, getStatus, writeDashboardStatus } from "../../../lib/githubStatus";
 
-const MIN_CHECK_INTERVAL_MS = 4 * 60 * 1000;
+const MIN_CHECK_INTERVAL_MS = 2 * 60 * 1000;
 
 function authorized(request) {
   const configuredToken = process.env.CRON_SECRET;
