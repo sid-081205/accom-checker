@@ -181,6 +181,34 @@ export async function dispatchChecker() {
   }
 }
 
+const CRONJOB_API_BASE = "https://api.cron-job.org";
+const CRONJOB_CHECKER_JOB_ID = process.env.CRONJOB_CHECKER_JOB_ID || "7809757";
+
+export async function setCheckerCronEnabled(enabled) {
+  const apiKey = process.env.CRONJOB_API_KEY;
+  if (!apiKey) {
+    throw new Error(
+      "CRONJOB_API_KEY is not configured; cannot pause/resume the checker schedule."
+    );
+  }
+
+  const response = await fetch(`${CRONJOB_API_BASE}/jobs/${CRONJOB_CHECKER_JOB_ID}`, {
+    method: "PATCH",
+    headers: {
+      Authorization: `Bearer ${apiKey}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({ job: { enabled: Boolean(enabled) } }),
+  });
+
+  if (!response.ok) {
+    const text = await response.text();
+    throw new Error(
+      `cron-job.org schedule toggle failed: ${response.status} ${response.statusText}: ${text}`
+    );
+  }
+}
+
 export async function dispatchSummary() {
   const token = statusToken({ write: true });
   if (!token) return;

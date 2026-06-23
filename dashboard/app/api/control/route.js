@@ -1,7 +1,12 @@
 import { cookies } from "next/headers";
 import { NextResponse } from "next/server";
 import { isAuthenticated } from "../../../lib/auth";
-import { dispatchChecker, writeControl, writeDashboardStatus } from "../../../lib/githubStatus";
+import {
+  dispatchChecker,
+  setCheckerCronEnabled,
+  writeControl,
+  writeDashboardStatus,
+} from "../../../lib/githubStatus";
 
 export async function POST(request) {
   const cookieStore = await cookies();
@@ -23,6 +28,7 @@ export async function POST(request) {
         updatedAt: new Date().toISOString(),
         updatedBy: "dashboard",
       });
+      await setCheckerCronEnabled(true);
       return NextResponse.redirect(new URL("/", request.url), 303);
     }
 
@@ -38,11 +44,13 @@ export async function POST(request) {
         message: "Checker was started from the dashboard. GitHub Actions run is being dispatched.",
         updatedAt: new Date().toISOString(),
       });
+      await setCheckerCronEnabled(true);
       await dispatchChecker();
     } else {
+      await setCheckerCronEnabled(false);
       await writeDashboardStatus({
         state: "paused",
-        message: "Checker was paused from the dashboard.",
+        message: "Checker was paused from the dashboard. The 5-minute schedule is disabled.",
         updatedAt: new Date().toISOString(),
       });
     }

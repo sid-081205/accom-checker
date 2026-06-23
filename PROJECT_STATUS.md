@@ -93,6 +93,26 @@ code. It is the single biggest source of operational noise (see issues below).
   you switch cron-job.org to call the dashboard instead of GitHub directly. They
   are harmless to keep as an alternative.
 
+## Pause/resume now controls the cron-job.org schedule
+
+Previously, the dashboard pause only wrote `control.json`; the checker kept being
+dispatched by cron-job.org and each run just exited early. Now the dashboard
+pause/resume also enables/disables the **cron-job.org checker job** (7809757) via
+the cron-job.org API, so pausing actually stops the GitHub Actions runs. The
+daily-summary job (7833387) is never touched and always runs.
+
+- `setCheckerCronEnabled(enabled)` in `dashboard/lib/githubStatus.js` PATCHes the
+  job's `enabled` flag.
+- `dashboard/app/api/control/route.js` calls it: resume/start/submitEmailCode →
+  enable; pause → disable.
+- **Requires a Vercel env var:** `CRONJOB_API_KEY` (cron-job.org API key).
+  Optional: `CRONJOB_CHECKER_JOB_ID` (defaults to `7809757`).
+- **The CLI is logged into a different Vercel account than the project's team
+  (`siddy-s-projects`), so this env var must be added via the Vercel dashboard
+  UI** (Settings → Environment Variables → Production), then redeploy. Until
+  then, pause/resume from the dashboard will error with "CRONJOB_API_KEY is not
+  configured".
+
 ## Open issues / what still needs to change
 
 ### 1. Vercel free-tier deployment quota (HIGH)
@@ -145,7 +165,9 @@ GitHub Actions secrets (checker + summary): `SMTP_HOST`, `SMTP_PORT`,
 `LSE_PASSWORD`, `LSE_COOKIES_B64`.
 
 Vercel env vars (dashboard): `CRON_SECRET`, `GITHUB_STATUS_TOKEN`,
-`GITHUB_STATUS_WRITE_TOKEN`, `GITHUB_STATUS_REPO`, `GITHUB_STATUS_BRANCH`.
+`GITHUB_STATUS_WRITE_TOKEN`, `GITHUB_STATUS_REPO`, `GITHUB_STATUS_BRANCH`,
+`CRONJOB_API_KEY` (for pause/resume), and optionally `CRONJOB_CHECKER_JOB_ID`
+(defaults to `7809757`).
 
 Dashboard URL: `https://lse-accom-checker-siddharthg0812-1399-siddy-s-projects.vercel.app`
 
@@ -173,6 +195,22 @@ key and the GitHub PAT as secrets — never commit them.
 
 Priority order. Most code changes are already committed/pushed to `master`; the
 remaining work is mostly verification and the run-count investigation.
+
+### P0 — Make dashboard pause/resume work end-to-end
+The code is committed: pause/resume toggles the cron-job.org checker job (7809757)
+via `setCheckerCronEnabled`. To activate it:
+1. Add `CRONJOB_API_KEY` (cron-job.org API key) to the Vercel project
+   (`siddy-s-projects/lse-accom-checker`) → Settings → Environment Variables →
+   Production. The local `vercel` CLI is logged into a different account, so this
+   must be done in the Vercel dashboard UI (or after `vercel login` to the right
+   account). Optionally also set `CRONJOB_CHECKER_JOB_ID` (defaults to 7809757).
+2. Redeploy `master` so the new control route is live.
+3. Test: pause from the dashboard → confirm cron-job.org job 7809757 flips to
+   disabled and Actions runs stop; resume → it re-enables and a run dispatches.
+
+Note: the checker job 7809757 is **currently disabled** (paused manually on
+2026-06-23). Resuming from the dashboard (once the env var is set + deployed)
+will re-enable it, or re-enable it manually in the cron-job.org console.
 
 ### P0 — Verify the daily summary is now correct
 1. **Wait for the next daily summary email** (sent ~23:55 Europe/London by
