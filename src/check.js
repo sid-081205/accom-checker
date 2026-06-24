@@ -5,7 +5,7 @@ const path = require("path");
 const nodemailer = require("nodemailer");
 const { Builder, By, until } = require("selenium-webdriver");
 const chrome = require("selenium-webdriver/chrome");
-const { appendEvent, readControl, writeStatus } = require("./status");
+const { appendEvent, readControl, redactPii, writeStatus } = require("./status");
 
 const START_URL =
   "https://lsestudentaccommodation.lse.ac.uk/Pages/EN/Lander.aspx?wf=Hub";
@@ -657,7 +657,7 @@ async function main() {
       }
 
       const message = `Attempt ${attempt}/${CHECK_ATTEMPTS} failed with a retryable browser/page error; retrying with a fresh browser. ${error.message}`;
-      console.warn(message);
+      console.warn(redactPii(message));
       await writeStatus({
         state: "retrying",
         message,
@@ -684,6 +684,6 @@ main().catch(async (error) => {
     state: error.message.includes("LSE_EMAIL") ? "login_failed" : "error",
     message: error.message,
   });
-  console.error(error.message);
+  console.error(redactPii(error.message));
   process.exitCode = 1;
 });

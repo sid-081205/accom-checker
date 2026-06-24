@@ -198,5 +198,6 @@ async function readControl() {
 module.exports = {
   appendEvent,
   readControl,
+  redactPii,
   writeStatus,
 };
