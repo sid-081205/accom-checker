@@ -11,6 +11,40 @@ function githubConfigured() {
   return Boolean(process.env.GITHUB_TOKEN && process.env.GITHUB_REPOSITORY);
 }
 
+// Status/events are persisted to a branch that may be published (public repo).
+// Scraped page text can contain personal data (name, student ID, email, etc.),
+// so redact known PII before anything is written.
+function redactPii(value) {
+  if (typeof value !== "string") return value;
+
+  let out = value;
+
+  if (process.env.LSE_EMAIL) {
+    out = out.split(process.env.LSE_EMAIL).join("[redacted]");
+  }
+
+  // Any email address.
+  out = out.replace(/[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/g, "[redacted-email]");
+
+  // Labeled fields scraped from the LSE account / "About You" pages, e.g.
+  // "STUDENT ID | 202453296", "NAME | JANE DOE", "EMAIL ADDRESS | x@y".
+  out = out.replace(
+    /\b(STUDENT ID|NAME|EMAIL ADDRESS|PREFERRED NAME|MOBILE NUMBER|PHONE|POSTCODE|ADDRESS|DATE OF BIRTH)\b(\s*[|:]\s*)([^|]*)/gi,
+    (match, label, separator) => `${label}${separator}[redacted]`
+  );
+
+  return out;
+}
+
+function sanitizeDeep(value) {
+  if (typeof value === "string") return redactPii(value);
+  if (Array.isArray(value)) return value.map(sanitizeDeep);
+  if (value && typeof value === "object") {
+    return Object.fromEntries(Object.entries(value).map(([key, val]) => [key, sanitizeDeep(val)]));
+  }
+  return value;
+}
+
 async function githubRequest(route, options = {}) {
   const response = await fetch(`https://api.github.com${route}`, {
     ...options,
@@ -128,20 +162,20 @@ async function safeStatusWrite(filePath, value) {
 
 async function writeStatus(partial) {
   const now = new Date().toISOString();
-  const status = {
+  const status = sanitizeDeep({
     updatedAt: now,
     workflowUrl: workflowUrl(),
     ...partial,
-  };
+  });
 
   await safeStatusWrite(STATUS_PATH, status);
 }
 
 async function appendEvent(event) {
-  const nextEvent = {
+  const nextEvent = sanitizeDeep({
     at: new Date().toISOString(),
     ...event,
-  };
+  });
   const existing = await readLocalJson(EVENTS_PATH, []);
   const events = [nextEvent, ...existing].slice(0, MAX_EVENTS);
 

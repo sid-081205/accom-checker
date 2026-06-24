@@ -141,6 +141,27 @@ availability email can fire, and — because the daily summary also runs on Acti
 one of: make the repo public (free unlimited Actions minutes), reduce the check
 frequency, or raise the GitHub spending limit. See action items below.
 
+## Security audit before going public (2026-06-24)
+
+Audited working tree + full git history (all branches) for exposed credentials/PII.
+
+- **`master` (code): CLEAN.** No secrets/PII; no `.env`/cookie/key files ever
+  committed (only `.env.example`).
+- **`status` branch: contained PII in history.** Across its ~18.5k commits, some
+  older `status.json`/`events.json` error messages embedded scraped account-page
+  text including the owner's name, student ID, and LSE email. The *current* HEAD
+  of the branch is clean, but the **history is not**.
+- **Implication:** GitHub has no per-branch visibility — making the repo public
+  exposes the `status` branch history too.
+
+Remediation:
+- **Done:** `src/status.js` now redacts PII (`redactPii`/`sanitizeDeep`) at the
+  single write choke point, so future status/events writes can't leak name/ID/
+  email even on a public repo.
+- **STILL REQUIRED before making the repo public:** wipe the `status` branch
+  history (replace with one clean commit) — the existing history still contains
+  PII. This is a destructive force-replace, so it needs explicit owner approval.
+
 ## Open issues / what still needs to change
 
 ### 1. Vercel free-tier deployment quota (HIGH)
