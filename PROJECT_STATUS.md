@@ -113,6 +113,34 @@ daily-summary job (7833387) is never touched and always runs.
   then, pause/resume from the dashboard will error with "CRONJOB_API_KEY is not
   configured".
 
+## Silent-failure watchdog (GitHub Actions limit detection)
+
+**Problem:** The repo is **private**, so Actions minutes are capped. At a 5-min
+cadence with ~2-min runs (~500+ min/day) the free monthly allowance is exhausted
+in days. When the limit is hit, cron-job.org's dispatch still succeeds (the run
+is created), but GitHub **never starts the job** — it's instantly marked
+`failure` with zero steps. So `check.js` never runs, `status.json` goes stale, no
+availability email can fire, and — because the daily summary also runs on Actions
+— even the summary stops. Total silent failure.
+
+**Solution (built):** A Vercel-hosted watchdog that survives Actions outages.
+- `dashboard/app/api/watchdog/route.js` — reads `control.json` and the recent
+  `check-availability.yml` runs. Returns HTTP **200** when healthy or
+  intentionally paused, and **503** when checks are silently failing (latest run
+  failed / no recent run / GitHub unreadable).
+- `getRecentCheckRuns()` added to `dashboard/lib/githubStatus.js`.
+- cron-job.org job **"Accom checker health watchdog"** (jobId 7902174) pings the
+  endpoint every 15 min with **failure + recovery email notifications** enabled
+  (`onFailureCount: 2`, so it needs ~30 min of failures before emailing — avoids
+  one-off flakes). cron-job.org sends the alert email, so no SMTP is needed in
+  the dashboard.
+- Auth: the endpoint and job share `CRON_SECRET` (now set in Vercel; sent as a
+  Bearer header by the job).
+
+**This only DETECTS the problem.** To actually stop hitting the limit, still do
+one of: make the repo public (free unlimited Actions minutes), reduce the check
+frequency, or raise the GitHub spending limit. See action items below.
+
 ## Open issues / what still needs to change
 
 ### 1. Vercel free-tier deployment quota (HIGH)
@@ -195,6 +223,17 @@ key and the GitHub PAT as secrets — never commit them.
 
 Priority order. Most code changes are already committed/pushed to `master`; the
 remaining work is mostly verification and the run-count investigation.
+
+### P0 — Stop exhausting GitHub Actions minutes (prevention)
+The watchdog now *detects* the limit being hit (emails via cron-job.org job
+7902174), but the private repo still burns ~500+ Actions min/day at a 5-min
+cadence and will keep hitting the cap. Pick a prevention:
+- **Make the repo public** (recommended) → unlimited free Actions minutes.
+  Secrets live in GitHub Secrets, not code, so they stay private. The `status`
+  branch (status.json/events.json) and source become visible — confirm that's ok.
+- **Reduce frequency** (e.g. every 15-20 min) by editing the checker cron-job.org
+  job (7809757) schedule via `scripts/setup-cronjobs.mjs` or the console.
+- **Raise the GitHub spending limit** / add a payment method (Billing & plans).
 
 ### P0 — Make dashboard pause/resume work end-to-end
 The code is committed: pause/resume toggles the cron-job.org checker job (7809757)

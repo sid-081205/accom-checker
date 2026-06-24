@@ -233,6 +233,16 @@ export async function dispatchSummary() {
   }
 }
 
+export async function getRecentCheckRuns(perPage = 10) {
+  const token = statusToken();
+  if (!token) return [];
+
+  const data = await githubApi(
+    `/repos/${REPO}/actions/workflows/check-availability.yml/runs?per_page=${perPage}`
+  );
+  return data?.workflow_runs || [];
+}
+
 export async function getStatus() {
   return readJsonFile("status.json", null);
 }
