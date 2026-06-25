@@ -6,7 +6,8 @@
   "scripts": {
     "check": "node src/check.js",
     "login": "node src/login.js",
-    "summary": "node src/summary.js"
+    "summary": "node src/summary.js",
+    "test:availability-inject": "node scripts/test-availability-inject.js"
   },
   "keywords": [],
   "author": "",
