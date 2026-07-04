@@ -1,7 +1,9 @@
 import { NextResponse } from "next/server";
 import { dispatchChecker, getControl, getStatus, writeDashboardStatus } from "../../../lib/githubStatus";
 
-const MIN_CHECK_INTERVAL_MS = 2 * 60 * 1000;
+// Must stay below the fastest schedule the dashboard can select (2 minutes),
+// otherwise this throttle would skip legitimate dispatches on that cadence.
+const MIN_CHECK_INTERVAL_MS = 90 * 1000;
 
 function authorized(request) {
   const configuredToken = process.env.CRON_SECRET;

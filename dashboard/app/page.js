@@ -1,7 +1,13 @@
 import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 import { isAuthenticated } from "../lib/auth";
-import { getControl, getEvents, getStatus } from "../lib/githubStatus";
+import {
+  CHECKER_INTERVAL_OPTIONS,
+  getCheckerCronInfo,
+  getControl,
+  getEvents,
+  getStatus,
+} from "../lib/githubStatus";
 
 export const dynamic = "force-dynamic";
 
@@ -36,15 +42,16 @@ function stateClass(state) {
   return "neutral";
 }
 
-function nextScheduledRun() {
+function nextScheduledRun(intervalMinutes) {
+  const interval = intervalMinutes || 5;
   const now = new Date();
   const next = new Date(now);
   const minutes = next.getUTCMinutes();
-  const minutesToAdd = 5 - (minutes % 5 || 5);
+  const minutesToAdd = interval - (minutes % interval || interval);
 
   next.setUTCMinutes(minutes + minutesToAdd, 0, 0);
   if (next <= now) {
-    next.setUTCMinutes(next.getUTCMinutes() + 5, 0, 0);
+    next.setUTCMinutes(next.getUTCMinutes() + interval, 0, 0);
   }
 
   return next;
@@ -57,7 +64,13 @@ export default async function DashboardPage({ searchParams }) {
   }
 
   const params = await searchParams;
-  const [status, events, control] = await Promise.all([getStatus(), getEvents(), getControl()]);
+  const [status, events, control, cronInfo] = await Promise.all([
+    getStatus(),
+    getEvents(),
+    getControl(),
+    getCheckerCronInfo(),
+  ]);
+  const intervalMinutes = cronInfo.available ? cronInfo.intervalMinutes : null;
   const currentState = status?.state || "unknown";
   const showAuthCard = status?.state === "needs_mfa" || status?.state === "needs_email_code";
   const statusTime = status?.updatedAt || status?.checkedAt;
@@ -121,10 +134,45 @@ export default async function DashboardPage({ searchParams }) {
 
         <article className="card">
           <p className="eyebrow">Next Scheduled Run</p>
-          <h3>{control.enabled ? formatDate(nextScheduledRun()) : "Paused"}</h3>
+          <h3>{control.enabled ? formatDate(nextScheduledRun(intervalMinutes)) : "Paused"}</h3>
           <p className="muted">
-            {control.enabled ? "GitHub Actions is scheduled every 5 minutes." : "Press Start to resume checks."}
+            {control.enabled
+              ? `GitHub Actions is scheduled every ${intervalMinutes || 5} minutes.`
+              : "Press Start to resume checks."}
           </p>
+        </article>
+
+        <article className="card">
+          <p className="eyebrow">Check Frequency</p>
+          <h3>
+            {cronInfo.available
+              ? intervalMinutes
+                ? `Every ${intervalMinutes} min`
+                : "Custom schedule"
+              : "Unavailable"}
+          </h3>
+          <p className="muted">
+            {cronInfo.available
+              ? "Switching updates the cron-job.org schedule immediately."
+              : `Could not read the cron-job.org schedule. ${cronInfo.error || ""}`}
+          </p>
+          {cronInfo.available ? (
+            <form action="/api/control" method="post" className="button-row">
+              <input type="hidden" name="action" value="setInterval" />
+              {CHECKER_INTERVAL_OPTIONS.map((option) => (
+                <button
+                  key={option}
+                  className={intervalMinutes === option ? undefined : "secondary"}
+                  name="intervalMinutes"
+                  value={option}
+                  type="submit"
+                  disabled={intervalMinutes === option}
+                >
+                  Every {option} min
+                </button>
+              ))}
+            </form>
+          ) : null}
         </article>
 
         <article className="card">

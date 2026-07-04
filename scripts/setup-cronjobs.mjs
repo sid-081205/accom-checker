@@ -10,11 +10,15 @@
 //   CRONJOB_API_KEY       API key from https://console.cron-job.org (Settings -> API)
 //   GITHUB_DISPATCH_TOKEN GitHub PAT with `actions: write` on the repo
 // Optional env vars:
-//   GITHUB_REPO     owner/repo (default sid-081205/accom-checker)
-//   GITHUB_REF      git ref to dispatch (default master)
-//   SUMMARY_HOUR    Hour (Europe/London) to send the daily summary (default 23)
-//   SUMMARY_MINUTE  Minute to send the daily summary (default 55)
-//   TIMEZONE        Schedule timezone (default Europe/London)
+//   GITHUB_REPO             owner/repo (default sid-081205/accom-checker)
+//   GITHUB_REF              git ref to dispatch (default master)
+//   SUMMARY_HOUR            Hour (Europe/London) to send the daily summary (default 23)
+//   SUMMARY_MINUTE          Minute to send the daily summary (default 55)
+//   TIMEZONE                Schedule timezone (default Europe/London)
+//   CHECK_INTERVAL_MINUTES  Checker cadence in minutes; must divide 60 (default 5).
+//                           NOTE: the dashboard "Check Frequency" toggle also edits
+//                           this schedule, so set this to the currently active
+//                           cadence before re-running, or the script will override it.
 
 const API_BASE = "https://api.cron-job.org";
 
@@ -34,8 +38,17 @@ const ref = process.env.GITHUB_REF || "master";
 const timezone = process.env.TIMEZONE || "Europe/London";
 const summaryHour = Number(process.env.SUMMARY_HOUR ?? 23);
 const summaryMinute = Number(process.env.SUMMARY_MINUTE ?? 55);
+const checkIntervalMinutes = Number(process.env.CHECK_INTERVAL_MINUTES ?? 5);
 
-const everyFiveMinutes = [0, 5, 10, 15, 20, 25, 30, 35, 40, 45, 50, 55];
+if (!Number.isInteger(checkIntervalMinutes) || checkIntervalMinutes < 1 || 60 % checkIntervalMinutes !== 0) {
+  console.error(`CHECK_INTERVAL_MINUTES must be a positive divisor of 60, got: ${process.env.CHECK_INTERVAL_MINUTES}`);
+  process.exit(1);
+}
+
+const checkerMinutes = Array.from(
+  { length: 60 / checkIntervalMinutes },
+  (_, index) => index * checkIntervalMinutes
+);
 
 const githubHeaders = {
   Accept: "application/vnd.github+json",
@@ -57,7 +70,7 @@ const jobs = [
       expiresAt: 0,
       hours: [-1],
       mdays: [-1],
-      minutes: everyFiveMinutes,
+      minutes: checkerMinutes,
       months: [-1],
       wdays: [-1],
     },

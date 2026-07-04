@@ -2,8 +2,10 @@ import { cookies } from "next/headers";
 import { NextResponse } from "next/server";
 import { isAuthenticated } from "../../../lib/auth";
 import {
+  CHECKER_INTERVAL_OPTIONS,
   dispatchChecker,
   setCheckerCronEnabled,
+  setCheckerCronInterval,
   writeControl,
   writeDashboardStatus,
 } from "../../../lib/githubStatus";
@@ -20,6 +22,17 @@ export async function POST(request) {
   const enabled = action === "start";
 
   try {
+    if (action === "setInterval") {
+      const interval = Number(`${formData.get("intervalMinutes") || ""}`.trim());
+      if (!CHECKER_INTERVAL_OPTIONS.includes(interval)) {
+        throw new Error(
+          `Invalid check interval. Allowed: ${CHECKER_INTERVAL_OPTIONS.join(", ")} minutes.`
+        );
+      }
+      await setCheckerCronInterval(interval);
+      return NextResponse.redirect(new URL("/", request.url), 303);
+    }
+
     if (action === "submitEmailCode") {
       await writeControl({
         enabled: true,
