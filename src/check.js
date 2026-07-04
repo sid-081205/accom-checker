@@ -496,6 +496,8 @@ function formatAvailabilityEmail(result) {
   ].join("\n");
 }
 
+const MAIL_SEND_ATTEMPTS = Number(process.env.MAIL_SEND_ATTEMPTS || 3);
+
 async function sendMail(subject, text) {
   const required = ["SMTP_HOST", "SMTP_PORT", "SMTP_USER", "SMTP_PASS", "EMAIL_TO"];
   const missing = required.filter((key) => !process.env[key]);
@@ -503,22 +505,43 @@ async function sendMail(subject, text) {
     throw new Error(`Missing email environment variables: ${missing.join(", ")}`);
   }
 
-  const transporter = nodemailer.createTransport({
-    host: process.env.SMTP_HOST,
-    port: Number(process.env.SMTP_PORT),
-    secure: process.env.SMTP_SECURE === "true",
-    auth: {
-      user: process.env.SMTP_USER,
-      pass: process.env.SMTP_PASS,
-    },
-  });
+  let lastError;
+  for (let attempt = 1; attempt <= MAIL_SEND_ATTEMPTS; attempt += 1) {
+    // Fresh transporter per attempt so a broken connection is not reused.
+    const transporter = nodemailer.createTransport({
+      host: process.env.SMTP_HOST,
+      port: Number(process.env.SMTP_PORT),
+      secure: process.env.SMTP_SECURE === "true",
+      auth: {
+        user: process.env.SMTP_USER,
+        pass: process.env.SMTP_PASS,
+      },
+    });
 
-  await transporter.sendMail({
-    from: process.env.EMAIL_FROM || process.env.SMTP_USER,
-    to: process.env.EMAIL_TO,
-    subject,
-    text,
-  });
+    try {
+      await transporter.sendMail({
+        from: process.env.EMAIL_FROM || process.env.SMTP_USER,
+        to: process.env.EMAIL_TO,
+        subject,
+        text,
+      });
+      return;
+    } catch (error) {
+      lastError = error;
+      console.warn(
+        `Email send attempt ${attempt}/${MAIL_SEND_ATTEMPTS} failed: ${redactPii(error.message)}`
+      );
+      if (attempt < MAIL_SEND_ATTEMPTS) {
+        await sleep(2000 * attempt);
+      }
+    } finally {
+      transporter.close();
+    }
+  }
+
+  throw new Error(
+    `Email send failed after ${MAIL_SEND_ATTEMPTS} attempts: ${lastError?.message || "unknown error"}`
+  );
 }
 
 async function sendAvailabilityEmail(result) {
@@ -550,15 +573,16 @@ async function performCheckAttempt(attempt) {
     const result = await extractAvailability(driver);
     const currentFingerprint = fingerprint(result);
     const previous = await readJson(STATE_PATH);
-
-    await writeJson(STATE_PATH, {
-      checkedAt: result.checkedAt,
-      fingerprint: currentFingerprint,
-      noAvailability: result.noAvailability,
-      roomCount: result.rooms.length,
-    });
+    const persistState = () =>
+      writeJson(STATE_PATH, {
+        checkedAt: result.checkedAt,
+        fingerprint: currentFingerprint,
+        noAvailability: result.noAvailability,
+        roomCount: result.rooms.length,
+      });
 
     if (result.noAvailability) {
+      await persistState();
       await writeStatus({
         state: "ok",
         message: "Checker ran successfully. No residences currently have availability.",
@@ -578,6 +602,7 @@ async function performCheckAttempt(attempt) {
     const alreadyAlerted =
       previous?.fingerprint === currentFingerprint && process.env.SEND_ON_EVERY_HIT !== "true";
     if (alreadyAlerted) {
+      await persistState();
       await writeStatus({
         state: "availability_found",
         message: "Availability signal is still present; duplicate email skipped.",
@@ -591,6 +616,10 @@ async function performCheckAttempt(attempt) {
     }
 
     await sendAvailabilityEmail(result);
+    // Persist the fingerprint only after the email is confirmed sent. If the
+    // send fails, the next run must not treat this availability as already
+    // alerted, or the one alert that matters would be skipped forever.
+    await persistState();
     await writeStatus({
       state: "availability_found",
       message: "Availability signal found and email sent.",
@@ -620,6 +649,7 @@ function isRetryableError(error) {
     "target window already closed",
     "net::",
     "detached",
+    "email send failed",
   ].some((needle) => message.toLowerCase().includes(needle));
 }
 
