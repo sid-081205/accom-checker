@@ -65,15 +65,33 @@ export async function GET(request) {
     );
   }
 
-  // A completed run with conclusion "failure" means the checker did not run
-  // successfully. The most common cause is the Actions spending/usage limit
-  // (job not started), but it also covers repeated checker crashes.
+  // A completed run that did not succeed means the checker did not scrape.
+  // That includes hard failures and cancelled runs (e.g. superseded while a
+  // previous run was stuck waiting for a runner / concurrency slot).
   if (latest.status === "completed" && latest.conclusion !== "success") {
     return NextResponse.json(
       {
         ok: false,
         reason: "latest_run_failed",
         conclusion: latest.conclusion,
+        latestRunAgeMinutes: ageMinutes,
+        latestRunUrl: latest.html_url,
+      },
+      { status: 503 }
+    );
+  }
+
+  // If several recent dispatches were cancelled, the concurrency group is
+  // likely wedged even if the absolute latest run eventually succeeded.
+  const recentCompleted = runs.filter((run) => run.status === "completed").slice(0, 6);
+  const recentCancelled = recentCompleted.filter((run) => run.conclusion === "cancelled");
+  if (recentCompleted.length >= 4 && recentCancelled.length >= Math.ceil(recentCompleted.length * 0.7)) {
+    return NextResponse.json(
+      {
+        ok: false,
+        reason: "mostly_cancelled",
+        cancelled: recentCancelled.length,
+        sampled: recentCompleted.length,
         latestRunAgeMinutes: ageMinutes,
         latestRunUrl: latest.html_url,
       },

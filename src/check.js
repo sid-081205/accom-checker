@@ -5,7 +5,7 @@ const path = require("path");
 const nodemailer = require("nodemailer");
 const { Builder, By, until } = require("selenium-webdriver");
 const chrome = require("selenium-webdriver/chrome");
-const { appendEvent, readControl, redactPii, writeStatus } = require("./status");
+const { appendEvent, readControl, recordCheckOutcome, redactPii, writeStatus } = require("./status");
 
 const START_URL =
   "https://lsestudentaccommodation.lse.ac.uk/Pages/EN/Lander.aspx?wf=Hub";
@@ -190,8 +190,15 @@ async function continueFromWestminsterQuestion(driver) {
 }
 
 async function accommodationLoginVisible(driver) {
+  // Prefer positive logged-in signals first. Matching bare "Login" is too broad —
+  // the lander nav often contains a Login link even when the session is valid,
+  // which forced a full login dance on every check and bloated run time/events.
+  if (await loggedInAccommodationVisible(driver).catch(() => false)) {
+    return false;
+  }
+
   const text = await bodyText(driver);
-  return text.includes("Please login") || text.includes("Login");
+  return /please\s+login/i.test(text);
 }
 
 async function loggedInAccommodationVisible(driver) {
@@ -287,10 +294,6 @@ async function automateLogin(driver) {
     state: "login_required",
     message: "Saved LSE session is missing or expired; starting automated login.",
   });
-  await appendEvent({
-    state: "login_required",
-    message: "Saved LSE session is missing or expired; starting automated login.",
-  });
 
   await driver.get(START_URL);
   await clickButtonByText(driver, "login", 8000).catch(() => false);
@@ -299,10 +302,6 @@ async function automateLogin(driver) {
     await writeStatus({
       state: "running",
       message: "LSE session is already active; continuing availability check.",
-    });
-    await appendEvent({
-      state: "running",
-      message: "LSE session is already active.",
     });
     return;
   }
@@ -313,10 +312,6 @@ async function automateLogin(driver) {
     await writeStatus({
       state: "running",
       message: "LSE session is already active after identity selection; continuing availability check.",
-    });
-    await appendEvent({
-      state: "running",
-      message: "LSE session is already active after identity selection.",
     });
     return;
   }
@@ -368,10 +363,6 @@ async function automateLogin(driver) {
         state: "running",
         message: "LSE login refreshed successfully with email verification; continuing availability check.",
       });
-      await appendEvent({
-        state: "running",
-        message: "LSE login refreshed successfully with email verification.",
-      });
       return;
     }
   }
@@ -397,10 +388,6 @@ async function automateLogin(driver) {
   await writeStatus({
     state: "running",
     message: "LSE login refreshed successfully; continuing availability check.",
-  });
-  await appendEvent({
-    state: "running",
-    message: "LSE login refreshed successfully.",
   });
 }
 
@@ -591,10 +578,7 @@ async function performCheckAttempt(attempt) {
         roomCount: result.rooms.length,
         summary: result.pageSummary,
       });
-      await appendEvent({
-        state: "ok",
-        message: "No availability found.",
-      });
+      await recordCheckOutcome("ok", "No availability found.");
       console.log(`[${result.checkedAt}] No availability.`);
       return;
     }
@@ -611,6 +595,10 @@ async function performCheckAttempt(attempt) {
         roomCount: result.rooms.length,
         summary: result.pageSummary,
       });
+      await recordCheckOutcome(
+        "availability_found",
+        "Availability signal is still present; duplicate email skipped."
+      );
       console.log(`[${result.checkedAt}] Availability signal unchanged; email skipped.`);
       return;
     }
@@ -628,10 +616,7 @@ async function performCheckAttempt(attempt) {
       roomCount: result.rooms.length,
       summary: result.pageSummary,
     });
-    await appendEvent({
-      state: "availability_found",
-      message: "Availability signal found and email sent.",
-    });
+    await recordCheckOutcome("availability_found", "Availability signal found and email sent.");
     console.log(`[${result.checkedAt}] Availability signal found; email sent.`);
   } finally {
     await driver.quit();
@@ -693,10 +678,6 @@ async function main() {
         message,
         error: error.stack || error.message,
       });
-      await appendEvent({
-        state: "retrying",
-        message,
-      });
       await sleep(5000 * attempt);
     }
   }
@@ -705,15 +686,13 @@ async function main() {
 }
 
 main().catch(async (error) => {
+  const state = error.message.includes("LSE_EMAIL") ? "login_failed" : "error";
   await writeStatus({
-    state: error.message.includes("LSE_EMAIL") ? "login_failed" : "error",
+    state,
     message: error.message,
     error: error.stack || error.message,
   });
-  await appendEvent({
-    state: error.message.includes("LSE_EMAIL") ? "login_failed" : "error",
-    message: error.message,
-  });
+  await recordCheckOutcome(state, error.message);
   console.error(redactPii(error.message));
   process.exitCode = 1;
 });

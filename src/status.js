@@ -5,10 +5,42 @@ const STATUS_BRANCH = process.env.STATUS_BRANCH || "status";
 const STATUS_PATH = ".state/status.json";
 const EVENTS_PATH = ".state/events.json";
 const CONTROL_PATH = ".state/control.json";
-const MAX_EVENTS = 1000;
+const DAILY_STATS_PATH = ".state/daily-stats.json";
+const MAX_EVENTS = 2000;
+const DAILY_STATS_RETENTION_DAYS = 14;
+const WRITE_ATTEMPTS = 5;
+
+// Terminal / noteworthy states kept in events.json for the daily summary.
+// Intermediate login/progress noise is intentionally excluded so the rolling
+// event log is not overwritten by 3 entries per check.
+const EVENT_STATES = new Set([
+  "ok",
+  "availability_found",
+  "error",
+  "login_failed",
+  "needs_mfa",
+  "needs_email_code",
+  "paused",
+]);
+
+const CHECK_OUTCOME_STATES = new Set([
+  "ok",
+  "availability_found",
+  "error",
+  "login_failed",
+]);
 
 function githubConfigured() {
   return Boolean(process.env.GITHUB_TOKEN && process.env.GITHUB_REPOSITORY);
+}
+
+function londonDate(value = new Date()) {
+  return new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Europe/London",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).format(new Date(value));
 }
 
 // Status/events are persisted to a branch that may be published (public repo).
@@ -49,7 +81,7 @@ async function githubRequest(route, options = {}) {
   const response = await fetch(`https://api.github.com${route}`, {
     ...options,
     headers: {
-      Accept: "application/vnd.github+json",
+      Accept: options.raw ? "application/vnd.github.raw+json" : "application/vnd.github+json",
       Authorization: `Bearer ${process.env.GITHUB_TOKEN}`,
       "Content-Type": "application/json",
       "X-GitHub-Api-Version": "2022-11-28",
@@ -61,7 +93,18 @@ async function githubRequest(route, options = {}) {
 
   if (!response.ok) {
     const text = await response.text();
-    throw new Error(`GitHub status write failed: ${response.status} ${response.statusText}: ${text}`);
+    const error = new Error(`GitHub status request failed: ${response.status} ${response.statusText}: ${text}`);
+    error.status = response.status;
+    throw error;
+  }
+
+  if (options.raw) {
+    const text = await response.text();
+    try {
+      return JSON.parse(text);
+    } catch {
+      return text;
+    }
   }
 
   return response.json();
@@ -91,24 +134,20 @@ async function ensureStatusBranch() {
   });
 }
 
-async function getRemoteFileSha(filePath) {
+async function getRemoteFileMeta(filePath) {
   if (!githubConfigured()) return null;
 
   const repo = process.env.GITHUB_REPOSITORY;
-  const file = await githubRequest(
-    `/repos/${repo}/contents/${encodeURIComponent(filePath)}?ref=${STATUS_BRANCH}`
-  );
-
-  return file?.sha || null;
+  return githubRequest(`/repos/${repo}/contents/${encodeURIComponent(filePath)}?ref=${STATUS_BRANCH}`);
 }
 
-async function writeRemoteJson(filePath, value) {
+async function writeRemoteJson(filePath, value, { sha } = {}) {
   if (!githubConfigured()) return;
 
   await ensureStatusBranch();
   const repo = process.env.GITHUB_REPOSITORY;
   const content = Buffer.from(JSON.stringify(value, null, 2)).toString("base64");
-  const sha = await getRemoteFileSha(filePath);
+  const currentSha = sha === undefined ? (await getRemoteFileMeta(filePath))?.sha : sha;
 
   await githubRequest(`/repos/${repo}/contents/${encodeURIComponent(filePath)}`, {
     method: "PUT",
@@ -116,7 +155,7 @@ async function writeRemoteJson(filePath, value) {
       branch: STATUS_BRANCH,
       message: `Update ${filePath} [skip ci]`,
       content,
-      ...(sha ? { sha } : {}),
+      ...(currentSha ? { sha: currentSha } : {}),
     }),
   });
 }
@@ -124,17 +163,18 @@ async function writeRemoteJson(filePath, value) {
 async function readRemoteJson(filePath, fallback) {
   if (!githubConfigured()) return fallback;
 
-  const repo = process.env.GITHUB_REPOSITORY;
-  const file = await githubRequest(
-    `/repos/${repo}/contents/${encodeURIComponent(filePath)}?ref=${STATUS_BRANCH}`,
-    {
-      headers: {
-        Accept: "application/vnd.github.raw+json",
-      },
-    }
-  );
-
-  return file || fallback;
+  try {
+    const repo = process.env.GITHUB_REPOSITORY;
+    const file = await githubRequest(
+      `/repos/${repo}/contents/${encodeURIComponent(filePath)}?ref=${STATUS_BRANCH}`,
+      { raw: true }
+    );
+    return file ?? fallback;
+  } catch (error) {
+    // Never fail the checker because GitHub status reads are flaky (502s, etc.).
+    console.warn(`Remote status read skipped for ${filePath}: ${error.message}`);
+    return fallback;
+  }
 }
 
 async function readLocalJson(filePath, fallback) {
@@ -153,10 +193,18 @@ async function writeLocalJson(filePath, value) {
 async function safeStatusWrite(filePath, value) {
   await writeLocalJson(filePath, value);
 
-  try {
-    await writeRemoteJson(path.basename(filePath), value);
-  } catch (error) {
-    console.warn(`Remote status write skipped: ${error.message}`);
+  for (let attempt = 1; attempt <= WRITE_ATTEMPTS; attempt += 1) {
+    try {
+      await writeRemoteJson(path.basename(filePath), value);
+      return;
+    } catch (error) {
+      const conflict = error.status === 409;
+      if (!conflict || attempt === WRITE_ATTEMPTS) {
+        console.warn(`Remote status write skipped: ${error.message}`);
+        return;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 250 * attempt));
+    }
   }
 }
 
@@ -172,14 +220,96 @@ async function writeStatus(partial) {
 }
 
 async function appendEvent(event) {
+  if (event?.state && !EVENT_STATES.has(event.state)) {
+    return;
+  }
+
   const nextEvent = sanitizeDeep({
     at: new Date().toISOString(),
     ...event,
   });
-  const existing = await readLocalJson(EVENTS_PATH, []);
-  const events = [nextEvent, ...existing].slice(0, MAX_EVENTS);
 
+  const localExisting = await readLocalJson(EVENTS_PATH, []);
+  let existing = localExisting;
+  if (githubConfigured()) {
+    const remoteExisting = await readRemoteJson("events.json", null);
+    if (Array.isArray(remoteExisting)) {
+      existing = remoteExisting;
+    }
+  }
+
+  const events = [nextEvent, ...existing].slice(0, MAX_EVENTS);
   await safeStatusWrite(EVENTS_PATH, events);
+}
+
+function pruneDailyStats(stats, today = londonDate()) {
+  const cutoff = new Date(`${today}T00:00:00Z`);
+  cutoff.setUTCDate(cutoff.getUTCDate() - DAILY_STATS_RETENTION_DAYS);
+
+  return Object.fromEntries(
+    Object.entries(stats).filter(([day]) => {
+      const parsed = new Date(`${day}T00:00:00Z`);
+      return !Number.isNaN(parsed.getTime()) && parsed >= cutoff;
+    })
+  );
+}
+
+function applyCheckOutcome(stats, state, at = new Date()) {
+  const day = londonDate(at);
+  const next = { ...stats };
+  const dayStats = {
+    checksCompleted: 0,
+    byState: {},
+    ...(next[day] || {}),
+  };
+  dayStats.byState = { ...(dayStats.byState || {}) };
+  dayStats.checksCompleted = Number(dayStats.checksCompleted || 0) + 1;
+  dayStats.byState[state] = Number(dayStats.byState[state] || 0) + 1;
+  dayStats.updatedAt = new Date(at).toISOString();
+  next[day] = dayStats;
+  return pruneDailyStats(next, day);
+}
+
+async function recordCheckOutcome(state, message) {
+  if (!CHECK_OUTCOME_STATES.has(state)) {
+    throw new Error(`Unsupported check outcome state: ${state}`);
+  }
+
+  await appendEvent({ state, message });
+
+  const localStats = applyCheckOutcome(await readLocalJson(DAILY_STATS_PATH, {}), state);
+  await writeLocalJson(DAILY_STATS_PATH, localStats);
+
+  if (!githubConfigured()) return localStats;
+
+  for (let attempt = 1; attempt <= WRITE_ATTEMPTS; attempt += 1) {
+    try {
+      const meta = await getRemoteFileMeta("daily-stats.json");
+      let remoteStats = {};
+      if (meta?.content) {
+        remoteStats = JSON.parse(Buffer.from(meta.content, "base64").toString("utf8"));
+      } else {
+        remoteStats = (await readRemoteJson("daily-stats.json", {})) || {};
+      }
+      const merged = applyCheckOutcome(remoteStats, state);
+      await writeRemoteJson("daily-stats.json", merged, { sha: meta?.sha || null });
+      return merged;
+    } catch (error) {
+      const retryable = error.status === 409 || error.status === 502 || error.status === 503;
+      if (!retryable || attempt === WRITE_ATTEMPTS) {
+        console.warn(`Remote daily-stats write skipped: ${error.message}`);
+        return localStats;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 250 * attempt));
+    }
+  }
+
+  return localStats;
+}
+
+async function readDailyStats() {
+  const local = await readLocalJson(DAILY_STATS_PATH, {});
+  return (await readRemoteJson("daily-stats.json", local)) || local;
 }
 
 async function readControl() {
@@ -196,8 +326,14 @@ async function readControl() {
 }
 
 module.exports = {
+  EVENT_STATES,
+  CHECK_OUTCOME_STATES,
   appendEvent,
+  applyCheckOutcome,
+  londonDate,
   readControl,
+  readDailyStats,
+  recordCheckOutcome,
   redactPii,
   writeStatus,
 };
