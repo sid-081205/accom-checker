@@ -65,10 +65,17 @@ export async function GET(request) {
     );
   }
 
-  // A completed run that did not succeed means the checker did not scrape.
-  // That includes hard failures and cancelled runs (e.g. superseded while a
-  // previous run was stuck waiting for a runner / concurrency slot).
-  if (latest.status === "completed" && latest.conclusion !== "success") {
+  // Only fail on a non-success latest run when nothing newer is already running.
+  // With cancel-in-progress, a just-cancelled run can briefly be the newest
+  // completed item while its replacement is in progress.
+  const hasNewerInFlight = runs.some(
+    (run) => run.status !== "completed" && new Date(run.created_at) >= new Date(latest.created_at)
+  );
+  if (
+    latest.status === "completed" &&
+    latest.conclusion !== "success" &&
+    !hasNewerInFlight
+  ) {
     return NextResponse.json(
       {
         ok: false,

@@ -229,17 +229,47 @@ async function appendEvent(event) {
     ...event,
   });
 
-  const localExisting = await readLocalJson(EVENTS_PATH, []);
-  let existing = localExisting;
-  if (githubConfigured()) {
-    const remoteExisting = await readRemoteJson("events.json", null);
-    if (Array.isArray(remoteExisting)) {
-      existing = remoteExisting;
+  // Read-merge-write with conflict retries so overlapping check runs do not
+  // clobber each other's events (safeStatusWrite alone would rewrite a stale
+  // snapshot after a 409).
+  let lastLocal = null;
+  for (let attempt = 1; attempt <= WRITE_ATTEMPTS; attempt += 1) {
+    const localExisting = await readLocalJson(EVENTS_PATH, []);
+    let existing = localExisting;
+    let remoteSha;
+
+    if (githubConfigured()) {
+      try {
+        const meta = await getRemoteFileMeta("events.json");
+        remoteSha = meta?.sha;
+        if (meta?.content) {
+          existing = JSON.parse(Buffer.from(meta.content, "base64").toString("utf8"));
+        }
+      } catch (error) {
+        console.warn(`Remote events read skipped: ${error.message}`);
+      }
+    }
+
+    const events = [nextEvent, ...(Array.isArray(existing) ? existing : [])].slice(0, MAX_EVENTS);
+    lastLocal = events;
+    await writeLocalJson(EVENTS_PATH, events);
+
+    if (!githubConfigured()) return;
+
+    try {
+      await writeRemoteJson("events.json", events, { sha: remoteSha || null });
+      return;
+    } catch (error) {
+      const retryable = error.status === 409 || error.status === 502 || error.status === 503;
+      if (!retryable || attempt === WRITE_ATTEMPTS) {
+        console.warn(`Remote events write skipped: ${error.message}`);
+        return;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 250 * attempt));
     }
   }
 
-  const events = [nextEvent, ...existing].slice(0, MAX_EVENTS);
-  await safeStatusWrite(EVENTS_PATH, events);
+  if (lastLocal) await writeLocalJson(EVENTS_PATH, lastLocal);
 }
 
 function pruneDailyStats(stats, today = londonDate()) {

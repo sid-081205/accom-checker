@@ -198,7 +198,18 @@ async function accommodationLoginVisible(driver) {
   }
 
   const text = await bodyText(driver);
-  return /please\s+login/i.test(text);
+  if (/please\s+login/i.test(text)) return true;
+
+  const url = await driver.getCurrentUrl().catch(() => "");
+  if (url.includes("login.microsoftonline.com")) return true;
+
+  // Logged-out lander fallback: Login CTA present and no booking entry points.
+  return (
+    /\blogin\b/i.test(text) &&
+    !/continue booking/i.test(text) &&
+    !/select your year of stay/i.test(text) &&
+    !/select your room type/i.test(text)
+  );
 }
 
 async function loggedInAccommodationVisible(driver) {
