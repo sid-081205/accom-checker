@@ -1,9 +1,11 @@
 require("dotenv").config();
 
 const nodemailer = require("nodemailer");
+const { londonDate, readDailyStats } = require("./status");
 
 const STATUS_BRANCH = process.env.STATUS_BRANCH || "status";
 const CHECK_WORKFLOW = "check-availability.yml";
+const MAX_RUN_PAGES = 15;
 
 async function githubRequest(route, { raw = false } = {}) {
   const response = await fetch(`https://api.github.com${route}`, {
@@ -20,55 +22,166 @@ async function githubRequest(route, { raw = false } = {}) {
     throw new Error(`GitHub read failed: ${response.status} ${response.statusText}: ${text}`);
   }
 
+  if (raw) {
+    const text = await response.text();
+    try {
+      return JSON.parse(text);
+    } catch {
+      return text;
+    }
+  }
+
   return response.json();
 }
 
 async function readStatusFile(filePath, fallback) {
   if (!process.env.GITHUB_TOKEN || !process.env.GITHUB_REPOSITORY) return fallback;
 
-  return (
-    (await githubRequest(
-      `/repos/${process.env.GITHUB_REPOSITORY}/contents/${filePath}?ref=${STATUS_BRANCH}`,
-      { raw: true }
-    )) || fallback
-  );
+  try {
+    return (
+      (await githubRequest(
+        `/repos/${process.env.GITHUB_REPOSITORY}/contents/${filePath}?ref=${STATUS_BRANCH}`,
+        { raw: true }
+      )) || fallback
+    );
+  } catch (error) {
+    console.warn(`Status file read failed for ${filePath}: ${error.message}`);
+    return fallback;
+  }
 }
 
-async function readTodayWorkflowRuns() {
+async function readTodayWorkflowRuns(today = londonDate(new Date())) {
   if (!process.env.GITHUB_TOKEN || !process.env.GITHUB_REPOSITORY) return [];
 
-  const today = londonDate(new Date());
-  const runs = [];
+  const byId = new Map();
 
   for (const event of ["schedule", "workflow_dispatch"]) {
-    for (let page = 1; page <= 10; page += 1) {
+    for (let page = 1; page <= MAX_RUN_PAGES; page += 1) {
       const payload = await githubRequest(
         `/repos/${process.env.GITHUB_REPOSITORY}/actions/workflows/${CHECK_WORKFLOW}/runs?event=${event}&per_page=100&page=${page}`
       );
       const pageRuns = payload?.workflow_runs || [];
       if (pageRuns.length === 0) break;
 
-      runs.push(...pageRuns.filter((run) => londonDate(run.created_at) === today));
+      for (const run of pageRuns) {
+        if (londonDate(run.created_at) === today) {
+          byId.set(run.id, run);
+        }
+      }
 
-      const hasOlderRuns = pageRuns.some((run) => londonDate(run.created_at) !== today);
-      if (hasOlderRuns) break;
+      const oldest = pageRuns[pageRuns.length - 1];
+      if (oldest && londonDate(oldest.created_at) < today) break;
     }
   }
 
-  return runs;
-}
-
-function londonDate(value) {
-  return new Intl.DateTimeFormat("en-CA", {
-    timeZone: "Europe/London",
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-  }).format(new Date(value));
+  return [...byId.values()];
 }
 
 function stateCount(events, state) {
   return events.filter((event) => event.state === state).length;
+}
+
+function summarizeWorkflowRuns(workflowRuns) {
+  const started = workflowRuns.length;
+  const completed = workflowRuns.filter((run) => run.status === "completed").length;
+  const succeeded = workflowRuns.filter((run) => run.conclusion === "success").length;
+  const failed = workflowRuns.filter((run) => run.conclusion === "failure").length;
+  const cancelled = workflowRuns.filter((run) => run.conclusion === "cancelled").length;
+  const skipped = workflowRuns.filter((run) => run.conclusion === "skipped").length;
+  const timedOut = workflowRuns.filter((run) => run.conclusion === "timed_out").length;
+  const otherCompleted = workflowRuns.filter(
+    (run) =>
+      run.status === "completed" &&
+      !["success", "failure", "cancelled", "skipped", "timed_out"].includes(run.conclusion)
+  ).length;
+  const inProgress = workflowRuns.filter((run) => run.status !== "completed").length;
+
+  return {
+    started,
+    completed,
+    succeeded,
+    failed,
+    cancelled,
+    skipped,
+    timedOut,
+    otherCompleted,
+    inProgress,
+  };
+}
+
+function buildHealthLine(workflow, checksCompleted) {
+  if (workflow.started === 0) {
+    return "Health: CRITICAL — no checker workflow dispatches were found for today.";
+  }
+
+  if (workflow.cancelled > 0 && workflow.cancelled >= workflow.succeeded) {
+    return `Health: DEGRADED — ${workflow.cancelled} dispatches were cancelled without running (often a stuck concurrency slot). Only ${checksCompleted} checks actually scraped.`;
+  }
+
+  if (workflow.failed > 0 && workflow.succeeded === 0) {
+    return "Health: CRITICAL — every completed workflow failed; availability alerts cannot fire.";
+  }
+
+  if (checksCompleted === 0) {
+    return "Health: CRITICAL — workflows ran but no scraper outcomes were recorded.";
+  }
+
+  if (workflow.failed > 0) {
+    return `Health: OK with ${workflow.failed} failed workflow(s); ${checksCompleted} checks completed.`;
+  }
+
+  return `Health: OK — ${checksCompleted} availability checks completed.`;
+}
+
+function buildSummaryText({ today, status, todaysEvents, workflow, dayStats }) {
+  const byState = dayStats?.byState || {};
+  const checksFromStats = Number(dayStats?.checksCompleted || 0);
+  const checksFromEvents = todaysEvents.filter((event) =>
+    ["ok", "availability_found", "error", "login_failed"].includes(event.state)
+  ).length;
+  // Prefer durable daily-stats counters; fall back to events for older days.
+  const useStats = checksFromStats > 0;
+  const checksCompleted = useStats ? checksFromStats : checksFromEvents;
+
+  const noAvailability = useStats ? Number(byState.ok || 0) : stateCount(todaysEvents, "ok");
+  const availabilitySignals = useStats
+    ? Number(byState.availability_found || 0)
+    : stateCount(todaysEvents, "availability_found");
+  const errors = useStats
+    ? Number(byState.error || 0) + Number(byState.login_failed || 0)
+    : stateCount(todaysEvents, "error") + stateCount(todaysEvents, "login_failed");
+  const authenticatorPrompts = stateCount(todaysEvents, "needs_mfa");
+  const emailCodePrompts = stateCount(todaysEvents, "needs_email_code");
+
+  return [
+    `Accom checker daily summary for ${today}`,
+    "",
+    "Workflow dispatches (cron → GitHub Actions)",
+    `  started: ${workflow.started}`,
+    `  completed: ${workflow.completed}`,
+    `  succeeded (job ran): ${workflow.succeeded}`,
+    `  failed: ${workflow.failed}`,
+    `  cancelled (superseded / never ran): ${workflow.cancelled}`,
+    workflow.timedOut ? `  timed out: ${workflow.timedOut}` : "",
+    workflow.skipped ? `  skipped: ${workflow.skipped}` : "",
+    workflow.otherCompleted ? `  other completed: ${workflow.otherCompleted}` : "",
+    workflow.inProgress ? `  still in progress at summary time: ${workflow.inProgress}` : "",
+    "",
+    "Availability checks that actually scraped",
+    `  completed: ${checksCompleted}`,
+    `  no availability: ${noAvailability}`,
+    `  availability signals: ${availabilitySignals}`,
+    `  authenticator prompts: ${authenticatorPrompts}`,
+    `  email-code prompts: ${emailCodePrompts}`,
+    `  errors: ${errors}`,
+    "",
+    buildHealthLine(workflow, checksCompleted),
+    `Latest state: ${status?.state || "unknown"}`,
+    `Latest message: ${status?.message || "No status message"}`,
+    status?.workflowUrl ? `Latest workflow: ${status.workflowUrl}` : "",
+  ]
+    .filter(Boolean)
+    .join("\n");
 }
 
 async function sendMail(subject, text) {
@@ -97,50 +210,40 @@ async function sendMail(subject, text) {
 }
 
 async function main() {
-  const [status, events, workflowRuns] = await Promise.all([
+  const today = londonDate(new Date());
+  const [status, events, workflowRuns, dailyStats] = await Promise.all([
     readStatusFile("status.json", null),
     readStatusFile("events.json", []),
-    readTodayWorkflowRuns(),
+    readTodayWorkflowRuns(today),
+    readDailyStats().catch(() => ({})),
   ]);
 
-  const today = londonDate(new Date());
-  const todaysEvents = events.filter((event) => londonDate(event.at) === today);
-  const completedCheckCount = todaysEvents.filter((event) =>
-    ["ok", "availability_found", "error", "login_failed", "needs_mfa", "needs_email_code"].includes(
-      event.state
-    )
-  ).length;
-  const workflowDispatchCount = workflowRuns.length;
-  const completedWorkflowCount = workflowRuns.filter((run) => run.status === "completed").length;
-  const successfulWorkflowCount = workflowRuns.filter((run) => run.conclusion === "success").length;
-  const failedWorkflowCount = workflowRuns.filter((run) => run.conclusion === "failure").length;
+  const todaysEvents = (events || []).filter((event) => londonDate(event.at) === today);
+  const workflow = summarizeWorkflowRuns(workflowRuns);
+  const dayStats = dailyStats?.[today] || null;
 
-  const text = [
-    `Accom checker daily summary for ${today}`,
-    "",
-    `Cron/workflow jobs started: ${workflowDispatchCount}`,
-    `Cron/workflow jobs completed: ${completedWorkflowCount}`,
-    `Cron/workflow jobs succeeded: ${successfulWorkflowCount}`,
-    `Cron/workflow jobs failed: ${failedWorkflowCount}`,
-    `Checks completed by scraper: ${completedCheckCount}`,
-    `No-availability checks: ${stateCount(todaysEvents, "ok")}`,
-    `Availability signals: ${stateCount(todaysEvents, "availability_found")}`,
-    `Authenticator prompts: ${stateCount(todaysEvents, "needs_mfa")}`,
-    `Email-code prompts: ${stateCount(todaysEvents, "needs_email_code")}`,
-    `Errors: ${stateCount(todaysEvents, "error") + stateCount(todaysEvents, "login_failed")}`,
-    "",
-    `Latest state: ${status?.state || "unknown"}`,
-    `Latest message: ${status?.message || "No status message"}`,
-    status?.workflowUrl ? `Latest workflow: ${status.workflowUrl}` : "",
-  ]
-    .filter(Boolean)
-    .join("\n");
+  const text = buildSummaryText({
+    today,
+    status,
+    todaysEvents,
+    workflow,
+    dayStats,
+  });
 
   await sendMail(`Accom checker daily summary - ${today}`, text);
   console.log(`Sent daily summary for ${today}.`);
+  console.log(text);
 }
 
-main().catch((error) => {
-  console.error(error.message);
-  process.exitCode = 1;
-});
+module.exports = {
+  buildHealthLine,
+  buildSummaryText,
+  summarizeWorkflowRuns,
+};
+
+if (require.main === module) {
+  main().catch((error) => {
+    console.error(error.message);
+    process.exitCode = 1;
+  });
+}

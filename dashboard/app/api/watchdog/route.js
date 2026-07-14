@@ -65,15 +65,40 @@ export async function GET(request) {
     );
   }
 
-  // A completed run with conclusion "failure" means the checker did not run
-  // successfully. The most common cause is the Actions spending/usage limit
-  // (job not started), but it also covers repeated checker crashes.
-  if (latest.status === "completed" && latest.conclusion !== "success") {
+  // Only fail on a non-success latest run when nothing newer is already running.
+  // With cancel-in-progress, a just-cancelled run can briefly be the newest
+  // completed item while its replacement is in progress.
+  const hasNewerInFlight = runs.some(
+    (run) => run.status !== "completed" && new Date(run.created_at) >= new Date(latest.created_at)
+  );
+  if (
+    latest.status === "completed" &&
+    latest.conclusion !== "success" &&
+    !hasNewerInFlight
+  ) {
     return NextResponse.json(
       {
         ok: false,
         reason: "latest_run_failed",
         conclusion: latest.conclusion,
+        latestRunAgeMinutes: ageMinutes,
+        latestRunUrl: latest.html_url,
+      },
+      { status: 503 }
+    );
+  }
+
+  // If several recent dispatches were cancelled, the concurrency group is
+  // likely wedged even if the absolute latest run eventually succeeded.
+  const recentCompleted = runs.filter((run) => run.status === "completed").slice(0, 6);
+  const recentCancelled = recentCompleted.filter((run) => run.conclusion === "cancelled");
+  if (recentCompleted.length >= 4 && recentCancelled.length >= Math.ceil(recentCompleted.length * 0.7)) {
+    return NextResponse.json(
+      {
+        ok: false,
+        reason: "mostly_cancelled",
+        cancelled: recentCancelled.length,
+        sampled: recentCompleted.length,
         latestRunAgeMinutes: ageMinutes,
         latestRunUrl: latest.html_url,
       },

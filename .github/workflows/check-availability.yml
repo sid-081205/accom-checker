@@ -6,14 +6,18 @@ on:
 permissions:
   contents: write
 
+# Newest dispatch wins. cancel-in-progress MUST be true: a run that is stuck
+# waiting for a runner still holds this group, and with cancel-in-progress
+# false every later dispatch is queued then cancelled — which is what wiped
+# out almost a full day of checks on 2026-07-13.
 concurrency:
   group: lse-accommodation-checker
-  cancel-in-progress: false
+  cancel-in-progress: true
 
 jobs:
   check:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 10
 
     env:
       SMTP_HOST: ${{ secrets.SMTP_HOST }}

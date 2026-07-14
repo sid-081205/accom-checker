@@ -7,6 +7,7 @@
     "check": "node src/check.js",
     "login": "node src/login.js",
     "summary": "node src/summary.js",
+    "test": "node test/summary.test.js && node test/availability.test.js",
     "test:availability-inject": "node scripts/test-availability-inject.js"
   },
   "keywords": [],
