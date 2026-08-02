@@ -1,3 +1,3 @@
 # Accom Checker
 
-Automated monitor for student accomodation availability
+I need a place to live 
