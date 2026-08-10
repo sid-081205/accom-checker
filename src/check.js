@@ -15,6 +15,35 @@ const CHROME_PROFILE_DIR = path.resolve(".auth/chrome-profile");
 const STATE_PATH = path.resolve(".state/last-result.json");
 const MFA_WAIT_MS = Number(process.env.MFA_WAIT_MS || 240000);
 const CHECK_ATTEMPTS = Number(process.env.CHECK_ATTEMPTS || 3);
+const BODY_TEXT_ATTEMPTS = Number(process.env.BODY_TEXT_ATTEMPTS || 4);
+
+// Page navigations / ASP.NET postbacks invalidate DOM handles mid-read.
+const TRANSIENT_PAGE_ERROR_NEEDLES = [
+  "stale element",
+  "no such execution context",
+  "execution context was destroyed",
+  "document was unloaded",
+  "frame was detached",
+  "detached",
+  "node with given id does not belong",
+];
+
+async function sleep(ms) {
+  await new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function errorText(error) {
+  return `${error?.name || ""}\n${error?.message || ""}\n${error?.stack || ""}`.toLowerCase();
+}
+
+function isTransientPageError(error) {
+  const message = errorText(error);
+  return TRANSIENT_PAGE_ERROR_NEEDLES.some((needle) => message.includes(needle));
+}
+
+function isTimeoutError(error) {
+  return /timeout|timed out/.test(errorText(error));
+}
 
 async function exists(filePath) {
   try {
@@ -56,9 +85,46 @@ async function createDriver() {
   return new Builder().forBrowser("chrome").setChromeOptions(options).build();
 }
 
-async function bodyText(driver) {
-  const body = await driver.wait(until.elementLocated(By.css("body")), 20000);
-  return body.getText();
+async function waitForDocumentReady(driver, timeoutMs = 20000) {
+  await driver.wait(async () => {
+    try {
+      const state = await driver.executeScript("return document.readyState");
+      return state === "complete" || state === "interactive";
+    } catch (error) {
+      // Navigation in flight — keep polling until readyState is readable.
+      if (isTransientPageError(error)) return false;
+      throw error;
+    }
+  }, timeoutMs);
+}
+
+async function settlePage(driver, pauseMs = 750) {
+  await waitForDocumentReady(driver);
+  await sleep(pauseMs);
+}
+
+// Prefer script-based text reads over WebElement.getText(): locating <body>
+// then calling getText() races with LSE postbacks and throws stale-element /
+// "no such execution context" under Chrome.
+async function bodyText(driver, attempts = BODY_TEXT_ATTEMPTS) {
+  let lastError;
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    try {
+      await waitForDocumentReady(driver);
+      const text = await driver.executeScript(
+        "return document.body ? (document.body.innerText || document.body.textContent || '') : ''"
+      );
+      return typeof text === "string" ? text : String(text || "");
+    } catch (error) {
+      lastError = error;
+      const retryable = isTransientPageError(error) || isTimeoutError(error);
+      if (!retryable || attempt === attempts) {
+        throw error;
+      }
+      await sleep(400 * attempt);
+    }
+  }
+  throw lastError;
 }
 
 async function pageDebug(driver) {
@@ -402,10 +468,24 @@ async function automateLogin(driver) {
   });
 }
 
-async function reachAvailabilityPage(driver) {
+async function loadAvailabilityLander(driver) {
   await driver.get(START_URL);
+  await settlePage(driver);
+  try {
+    return await bodyText(driver);
+  } catch (error) {
+    // One hard reload when the lander keeps navigating during the first read.
+    if (!isTransientPageError(error) && !isTimeoutError(error)) {
+      throw error;
+    }
+    await driver.get(START_URL);
+    await settlePage(driver, 1200);
+    return bodyText(driver);
+  }
+}
 
-  let text = await bodyText(driver);
+async function reachAvailabilityPage(driver) {
+  let text = await loadAvailabilityLander(driver);
   if (await accommodationLoginVisible(driver)) {
     throw new Error(
       "Not logged in. Run `npm run login`, complete LSE login, then run the checker again."
@@ -416,10 +496,12 @@ async function reachAvailabilityPage(driver) {
     driver,
     By.xpath("//a[contains(translate(normalize-space(.), 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'continue booking')]")
   );
+  await settlePage(driver, 500);
 
   text = await bodyText(driver);
   if (text.includes("Would you like to book a room in urbanest Westminster Bridge")) {
     await continueFromWestminsterQuestion(driver);
+    await settlePage(driver, 500);
   }
 
   text = await bodyText(driver);
@@ -428,10 +510,18 @@ async function reachAvailabilityPage(driver) {
     if (!confirmed) {
       throw new Error("Could not click Confirm on the About You page.");
     }
+    await settlePage(driver, 500);
   }
 
   try {
-    await driver.wait(async () => (await bodyText(driver)).includes("Select your room type"), 15000);
+    await driver.wait(async () => {
+      try {
+        return (await bodyText(driver)).includes("Select your room type");
+      } catch (error) {
+        if (isTransientPageError(error)) return false;
+        throw error;
+      }
+    }, 20000);
   } catch (error) {
     const debug = await pageDebug(driver);
     throw new Error(
@@ -635,22 +725,18 @@ async function performCheckAttempt(attempt) {
 }
 
 function isRetryableError(error) {
-  const message = `${error?.message || ""}\n${error?.stack || ""}`;
+  if (isTransientPageError(error) || isTimeoutError(error)) {
+    return true;
+  }
+
+  const message = errorText(error);
   return [
     "no such element",
-    "stale element",
-    "timeout",
-    "timed out",
     "chrome not reachable",
     "target window already closed",
     "net::",
-    "detached",
     "email send failed",
-  ].some((needle) => message.toLowerCase().includes(needle));
-}
-
-async function sleep(ms) {
-  await new Promise((resolve) => setTimeout(resolve, ms));
+  ].some((needle) => message.includes(needle));
 }
 
 async function main() {
@@ -696,14 +782,26 @@ async function main() {
   throw lastError;
 }
 
-main().catch(async (error) => {
-  const state = error.message.includes("LSE_EMAIL") ? "login_failed" : "error";
-  await writeStatus({
-    state,
-    message: error.message,
-    error: error.stack || error.message,
+if (require.main === module) {
+  main().catch(async (error) => {
+    const state = error.message.includes("LSE_EMAIL") ? "login_failed" : "error";
+    await writeStatus({
+      state,
+      message: error.message,
+      error: error.stack || error.message,
+    });
+    await recordCheckOutcome(state, error.message);
+    console.error(redactPii(error.message));
+    process.exitCode = 1;
   });
-  await recordCheckOutcome(state, error.message);
-  console.error(redactPii(error.message));
-  process.exitCode = 1;
-});
+}
+
+module.exports = {
+  BODY_TEXT_ATTEMPTS,
+  bodyText,
+  isRetryableError,
+  isTimeoutError,
+  isTransientPageError,
+  settlePage,
+  waitForDocumentReady,
+};
