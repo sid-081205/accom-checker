@@ -28,6 +28,7 @@ function stateLabel(state) {
     needs_mfa: "Needs Authenticator Approval",
     needs_email_code: "Needs Email Code",
     login_failed: "Login Failed",
+    site_error: "LSE Portal Error",
     paused: "Paused",
     retrying: "Retrying",
     error: "Error",
@@ -37,7 +38,14 @@ function stateLabel(state) {
 
 function stateClass(state) {
   if (state === "availability_found") return "good";
-  if (state === "needs_mfa" || state === "needs_email_code" || state === "paused") return "warn";
+  if (
+    state === "needs_mfa" ||
+    state === "needs_email_code" ||
+    state === "paused" ||
+    state === "site_error"
+  ) {
+    return "warn";
+  }
   if (state === "error" || state === "login_failed") return "bad";
   return "neutral";
 }

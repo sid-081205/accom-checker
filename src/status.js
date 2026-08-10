@@ -17,6 +17,7 @@ const EVENT_STATES = new Set([
   "ok",
   "availability_found",
   "error",
+  "site_error",
   "login_failed",
   "needs_mfa",
   "needs_email_code",
@@ -27,6 +28,7 @@ const CHECK_OUTCOME_STATES = new Set([
   "ok",
   "availability_found",
   "error",
+  "site_error",
   "login_failed",
 ]);
 

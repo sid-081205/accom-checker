@@ -137,7 +137,7 @@ function buildSummaryText({ today, status, todaysEvents, workflow, dayStats }) {
   const byState = dayStats?.byState || {};
   const checksFromStats = Number(dayStats?.checksCompleted || 0);
   const checksFromEvents = todaysEvents.filter((event) =>
-    ["ok", "availability_found", "error", "login_failed"].includes(event.state)
+    ["ok", "availability_found", "error", "site_error", "login_failed"].includes(event.state)
   ).length;
   // Prefer durable daily-stats counters; fall back to events for older days.
   const useStats = checksFromStats > 0;
@@ -148,8 +148,12 @@ function buildSummaryText({ today, status, todaysEvents, workflow, dayStats }) {
     ? Number(byState.availability_found || 0)
     : stateCount(todaysEvents, "availability_found");
   const errors = useStats
-    ? Number(byState.error || 0) + Number(byState.login_failed || 0)
-    : stateCount(todaysEvents, "error") + stateCount(todaysEvents, "login_failed");
+    ? Number(byState.error || 0) +
+      Number(byState.site_error || 0) +
+      Number(byState.login_failed || 0)
+    : stateCount(todaysEvents, "error") +
+      stateCount(todaysEvents, "site_error") +
+      stateCount(todaysEvents, "login_failed");
   const authenticatorPrompts = stateCount(todaysEvents, "needs_mfa");
   const emailCodePrompts = stateCount(todaysEvents, "needs_email_code");
 
