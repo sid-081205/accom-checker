@@ -1,8 +1,12 @@
 const assert = require("assert");
 const {
+  isLsePortalError,
+  isLseUnexpectedErrorPage,
   isRetryableError,
   isTimeoutError,
   isTransientPageError,
+  lsePortalError,
+  outcomeStateForError,
 } = require("../src/check");
 
 function testTransientPageErrors() {
@@ -29,6 +33,23 @@ function testTimeoutDetection() {
   assert.ok(isTimeoutError({ message: "timeout" }));
   assert.ok(isTimeoutError({ name: "TimeoutError", message: "Waiting for element timed out: 20000" }));
   assert.ok(!isTimeoutError({ message: "no such element: Unable to locate element" }));
+}
+
+function testLseUnexpectedErrorPageDetection() {
+  assert.ok(
+    isLseUnexpectedErrorPage({
+      title: "An Error has Occurred",
+      text: "Unexpected Error\nSorry, there has been an unexpected error. Please close your browser and retry after a few minutes",
+    })
+  );
+  assert.ok(!isLseUnexpectedErrorPage({ title: "Hub", text: "Select your Year of Stay" }));
+  const portalError = lsePortalError({
+    title: "An Error has Occurred",
+    url: "https://lsestudentaccommodation.lse.ac.uk/Pages/EN/Lander.aspx?wf=Hub",
+  });
+  assert.ok(isLsePortalError(portalError));
+  assert.ok(isRetryableError(portalError));
+  assert.strictEqual(outcomeStateForError(portalError), "site_error");
 }
 
 function testRetryableBrowserErrors() {
@@ -79,6 +100,7 @@ async function testBodyTextRetriesTransientErrors() {
 
 testTransientPageErrors();
 testTimeoutDetection();
+testLseUnexpectedErrorPageDetection();
 testRetryableBrowserErrors();
 testBodyTextRetriesTransientErrors()
   .then(() => {

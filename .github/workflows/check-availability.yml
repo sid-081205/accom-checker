@@ -17,7 +17,8 @@ concurrency:
 jobs:
   check:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    # Includes up to ~90s of backoff when LSE serves its Unexpected Error page.
+    timeout-minutes: 12
 
     env:
       SMTP_HOST: ${{ secrets.SMTP_HOST }}
@@ -58,12 +59,15 @@ jobs:
           restore-keys: |
             availability-state-
 
-      - name: Restore cached LSE login session
+      # Cookies only — never restore chrome-profile. Cached profiles across
+      # runners were correlated with LSE "An Error has Occurred" pages.
+      - name: Restore cached LSE login cookies
         uses: actions/cache/restore@v4
         with:
-          path: .auth
-          key: lse-auth-${{ github.run_id }}
+          path: .auth/lse-cookies.json
+          key: lse-cookies-${{ github.run_id }}
           restore-keys: |
+            lse-cookies-
             lse-auth-
 
       - name: Seed LSE login session from secret
@@ -71,6 +75,7 @@ jobs:
           LSE_COOKIES_B64: ${{ secrets.LSE_COOKIES_B64 }}
         run: |
           mkdir -p .auth
+          rm -rf .auth/chrome-profile
           if [ ! -f .auth/lse-cookies.json ] && [ -n "$LSE_COOKIES_B64" ]; then
             printf "%s" "$LSE_COOKIES_B64" | base64 --decode > .auth/lse-cookies.json
           fi
@@ -78,9 +83,9 @@ jobs:
       - name: Check availability
         run: npm run check
 
-      - name: Save cached LSE login session
+      - name: Save cached LSE login cookies
         if: always()
         uses: actions/cache/save@v4
         with:
-          path: .auth
-          key: lse-auth-${{ github.run_id }}
+          path: .auth/lse-cookies.json
+          key: lse-cookies-${{ github.run_id }}

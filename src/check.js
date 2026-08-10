@@ -16,6 +16,8 @@ const STATE_PATH = path.resolve(".state/last-result.json");
 const MFA_WAIT_MS = Number(process.env.MFA_WAIT_MS || 240000);
 const CHECK_ATTEMPTS = Number(process.env.CHECK_ATTEMPTS || 3);
 const BODY_TEXT_ATTEMPTS = Number(process.env.BODY_TEXT_ATTEMPTS || 4);
+const SITE_ERROR_RETRY_MS = Number(process.env.SITE_ERROR_RETRY_MS || 30000);
+const LSE_PORTAL_ERROR_PREFIX = "LSE portal unexpected error";
 
 // Page navigations / ASP.NET postbacks invalidate DOM handles mid-read.
 const TRANSIENT_PAGE_ERROR_NEEDLES = [
@@ -45,6 +47,52 @@ function isTimeoutError(error) {
   return /timeout|timed out/.test(errorText(error));
 }
 
+function isLseUnexpectedErrorPage({ text = "", title = "" } = {}) {
+  const haystack = `${title}\n${text}`.toLowerCase();
+  return (
+    haystack.includes("an error has occurred") ||
+    haystack.includes("unexpected error") ||
+    haystack.includes("please close your browser and retry")
+  );
+}
+
+function isLsePortalError(error) {
+  return errorText(error).includes(LSE_PORTAL_ERROR_PREFIX.toLowerCase());
+}
+
+function lsePortalError(debug = {}) {
+  const detail = [
+    debug.title && `Title: ${debug.title}`,
+    debug.url && `URL: ${debug.url}`,
+    debug.text && `Visible text: ${debug.text}`,
+  ]
+    .filter(Boolean)
+    .join(". ");
+  return new Error(
+    `${LSE_PORTAL_ERROR_PREFIX}: the accommodation site asked to close the browser and retry later.${
+      detail ? ` ${detail}` : ""
+    }`
+  );
+}
+
+async function assertNotLseUnexpectedError(driver, text) {
+  const title = await driver.getTitle().catch(() => "");
+  const pageText = text ?? (await bodyText(driver).catch(() => ""));
+  if (isLseUnexpectedErrorPage({ text: pageText, title })) {
+    const url = await driver.getCurrentUrl().catch(() => "unknown");
+    throw lsePortalError({
+      title,
+      url,
+      text: String(pageText)
+        .split("\n")
+        .map((line) => line.trim())
+        .filter(Boolean)
+        .slice(0, 12)
+        .join(" | "),
+    });
+  }
+}
+
 async function exists(filePath) {
   try {
     await fs.access(filePath);
@@ -70,6 +118,9 @@ async function saveCookies(driver) {
 }
 
 async function createDriver() {
+  // Never reuse a Chrome profile across attempts/runners. Cached profiles from
+  // GitHub Actions were correlated with LSE serving "An Error has Occurred".
+  await fs.rm(CHROME_PROFILE_DIR, { recursive: true, force: true });
   await fs.mkdir(CHROME_PROFILE_DIR, { recursive: true });
   const options = new chrome.Options();
   if (process.env.HEADLESS !== "false") {
@@ -471,8 +522,9 @@ async function automateLogin(driver) {
 async function loadAvailabilityLander(driver) {
   await driver.get(START_URL);
   await settlePage(driver);
+  let text;
   try {
-    return await bodyText(driver);
+    text = await bodyText(driver);
   } catch (error) {
     // One hard reload when the lander keeps navigating during the first read.
     if (!isTransientPageError(error) && !isTimeoutError(error)) {
@@ -480,8 +532,10 @@ async function loadAvailabilityLander(driver) {
     }
     await driver.get(START_URL);
     await settlePage(driver, 1200);
-    return bodyText(driver);
+    text = await bodyText(driver);
   }
+  await assertNotLseUnexpectedError(driver, text);
+  return text;
 }
 
 async function reachAvailabilityPage(driver) {
@@ -497,11 +551,13 @@ async function reachAvailabilityPage(driver) {
     By.xpath("//a[contains(translate(normalize-space(.), 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'continue booking')]")
   );
   await settlePage(driver, 500);
+  await assertNotLseUnexpectedError(driver);
 
   text = await bodyText(driver);
   if (text.includes("Would you like to book a room in urbanest Westminster Bridge")) {
     await continueFromWestminsterQuestion(driver);
     await settlePage(driver, 500);
+    await assertNotLseUnexpectedError(driver);
   }
 
   text = await bodyText(driver);
@@ -511,19 +567,27 @@ async function reachAvailabilityPage(driver) {
       throw new Error("Could not click Confirm on the About You page.");
     }
     await settlePage(driver, 500);
+    await assertNotLseUnexpectedError(driver);
   }
 
   try {
     await driver.wait(async () => {
       try {
-        return (await bodyText(driver)).includes("Select your room type");
+        const current = await bodyText(driver);
+        await assertNotLseUnexpectedError(driver, current);
+        return current.includes("Select your room type");
       } catch (error) {
+        if (isLsePortalError(error)) throw error;
         if (isTransientPageError(error)) return false;
         throw error;
       }
     }, 20000);
   } catch (error) {
+    if (isLsePortalError(error)) throw error;
     const debug = await pageDebug(driver);
+    if (isLseUnexpectedErrorPage(debug)) {
+      throw lsePortalError(debug);
+    }
     throw new Error(
       `Timed out waiting for availability page. URL: ${debug.url}. Title: ${debug.title}. Visible text: ${debug.text}`
     );
@@ -725,7 +789,7 @@ async function performCheckAttempt(attempt) {
 }
 
 function isRetryableError(error) {
-  if (isTransientPageError(error) || isTimeoutError(error)) {
+  if (isTransientPageError(error) || isTimeoutError(error) || isLsePortalError(error)) {
     return true;
   }
 
@@ -737,6 +801,13 @@ function isRetryableError(error) {
     "net::",
     "email send failed",
   ].some((needle) => message.includes(needle));
+}
+
+function outcomeStateForError(error) {
+  const message = error?.message || "";
+  if (message.includes("LSE_EMAIL")) return "login_failed";
+  if (isLsePortalError(error)) return "site_error";
+  return "error";
 }
 
 async function main() {
@@ -768,14 +839,17 @@ async function main() {
         throw error;
       }
 
-      const message = `Attempt ${attempt}/${CHECK_ATTEMPTS} failed with a retryable browser/page error; retrying with a fresh browser. ${error.message}`;
+      const portalDown = isLsePortalError(error);
+      const message = portalDown
+        ? `Attempt ${attempt}/${CHECK_ATTEMPTS} hit an LSE portal error page; waiting before a fresh browser retry. ${error.message}`
+        : `Attempt ${attempt}/${CHECK_ATTEMPTS} failed with a retryable browser/page error; retrying with a fresh browser. ${error.message}`;
       console.warn(redactPii(message));
       await writeStatus({
         state: "retrying",
         message,
         error: error.stack || error.message,
       });
-      await sleep(5000 * attempt);
+      await sleep(portalDown ? SITE_ERROR_RETRY_MS * attempt : 5000 * attempt);
     }
   }
 
@@ -784,7 +858,7 @@ async function main() {
 
 if (require.main === module) {
   main().catch(async (error) => {
-    const state = error.message.includes("LSE_EMAIL") ? "login_failed" : "error";
+    const state = outcomeStateForError(error);
     await writeStatus({
       state,
       message: error.message,
@@ -799,9 +873,13 @@ if (require.main === module) {
 module.exports = {
   BODY_TEXT_ATTEMPTS,
   bodyText,
+  isLsePortalError,
+  isLseUnexpectedErrorPage,
   isRetryableError,
   isTimeoutError,
   isTransientPageError,
+  lsePortalError,
+  outcomeStateForError,
   settlePage,
   waitForDocumentReady,
 };
