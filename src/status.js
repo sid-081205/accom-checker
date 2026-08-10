@@ -354,7 +354,19 @@ async function readControl() {
     emailCodeUpdatedAt: remote?.emailCodeUpdatedAt,
     updatedAt: remote?.updatedAt,
     updatedBy: remote?.updatedBy,
+    pauseReason: remote?.pauseReason,
   };
+}
+
+async function writeControl(partial) {
+  const existing = await readControl();
+  const next = sanitizeDeep({
+    ...existing,
+    ...partial,
+    updatedAt: partial?.updatedAt || new Date().toISOString(),
+  });
+  await safeStatusWrite(CONTROL_PATH, next);
+  return next;
 }
 
 module.exports = {
@@ -367,5 +379,6 @@ module.exports = {
   readDailyStats,
   recordCheckOutcome,
   redactPii,
+  writeControl,
   writeStatus,
 };

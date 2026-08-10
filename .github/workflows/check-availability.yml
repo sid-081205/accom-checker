@@ -6,13 +6,13 @@ on:
 permissions:
   contents: write
 
-# Newest dispatch wins. cancel-in-progress MUST be true: a run that is stuck
-# waiting for a runner still holds this group, and with cancel-in-progress
-# false every later dispatch is queued then cancelled — which is what wiped
-# out almost a full day of checks on 2026-07-13.
+# Do NOT cancel in-progress runs. MFA/email-code waits need the browser session
+# to stay alive; cancelling them every 5 minutes was regenerating a new
+# Authenticator number on every cron tick. Auth failures auto-pause the
+# checker so queued follow-ups exit immediately instead of starting new logins.
 concurrency:
   group: lse-accommodation-checker
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 jobs:
   check:
@@ -68,7 +68,6 @@ jobs:
           key: lse-cookies-${{ github.run_id }}
           restore-keys: |
             lse-cookies-
-            lse-auth-
 
       - name: Seed LSE login session from secret
         env:
@@ -83,8 +82,10 @@ jobs:
       - name: Check availability
         run: npm run check
 
+      # Only persist cookies after a successful check. Saving mid-MFA / failed
+      # cookies poisons the next restore and forces another Authenticator prompt.
       - name: Save cached LSE login cookies
-        if: always()
+        if: success()
         uses: actions/cache/save@v4
         with:
           path: .auth/lse-cookies.json

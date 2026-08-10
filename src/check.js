@@ -5,7 +5,14 @@ const path = require("path");
 const nodemailer = require("nodemailer");
 const { Builder, By, until } = require("selenium-webdriver");
 const chrome = require("selenium-webdriver/chrome");
-const { appendEvent, readControl, recordCheckOutcome, redactPii, writeStatus } = require("./status");
+const {
+  appendEvent,
+  readControl,
+  recordCheckOutcome,
+  redactPii,
+  writeControl,
+  writeStatus,
+} = require("./status");
 
 const START_URL =
   "https://lsestudentaccommodation.lse.ac.uk/Pages/EN/Lander.aspx?wf=Hub";
@@ -112,9 +119,112 @@ async function writeJson(filePath, data) {
   await fs.writeFile(filePath, JSON.stringify(data, null, 2));
 }
 
+function cdpCookiesToSelenium(cdpCookies = []) {
+  return cdpCookies.map((cookie) => {
+    const seleniumCookie = {
+      name: cookie.name,
+      value: cookie.value,
+      path: cookie.path || "/",
+      domain: cookie.domain,
+      secure: Boolean(cookie.secure),
+      httpOnly: Boolean(cookie.httpOnly),
+    };
+    if (cookie.sameSite && cookie.sameSite !== "None") {
+      seleniumCookie.sameSite = cookie.sameSite;
+    } else if (cookie.sameSite === "None") {
+      seleniumCookie.sameSite = "None";
+    }
+    if (!cookie.session && Number(cookie.expires) > 0) {
+      seleniumCookie.expiry = Math.floor(Number(cookie.expires));
+    }
+    return seleniumCookie;
+  });
+}
+
+function seleniumCookiesToCdp(cookies = []) {
+  return cookies.map((cookie) => {
+    const cdpCookie = {
+      name: cookie.name,
+      value: cookie.value,
+      path: cookie.path || "/",
+      domain: cookie.domain,
+      secure: Boolean(cookie.secure),
+      httpOnly: Boolean(cookie.httpOnly),
+    };
+    if (cookie.sameSite) cdpCookie.sameSite = cookie.sameSite;
+    if (cookie.expiry) cdpCookie.expires = Number(cookie.expiry);
+    return cdpCookie;
+  });
+}
+
 async function saveCookies(driver) {
-  const cookies = await driver.manage().getCookies();
+  // Prefer CDP all-cookies so Microsoft SSO cookies are kept, not just the
+  // current LSE host's ASP.NET_SessionId (which alone cannot restore login).
+  let cookies;
+  try {
+    const result = await driver.sendAndGetDevToolsCommand("Network.getAllCookies", {});
+    cookies = cdpCookiesToSelenium(result?.cookies || []);
+  } catch (error) {
+    console.warn(`CDP getAllCookies failed; falling back to current-domain cookies: ${error.message}`);
+    cookies = await driver.manage().getCookies();
+  }
   await writeJson(AUTH_COOKIES_PATH, cookies);
+  return cookies;
+}
+
+async function loadCookies(driver) {
+  await driver.get(START_URL);
+  if (!(await exists(AUTH_COOKIES_PATH))) return false;
+
+  const cookies = await readJson(AUTH_COOKIES_PATH);
+  if (!Array.isArray(cookies) || cookies.length === 0) return false;
+
+  const now = Math.floor(Date.now() / 1000);
+  const valid = cookies.filter((cookie) => !cookie.expiry || cookie.expiry > now);
+  if (valid.length === 0) return false;
+
+  try {
+    await driver.sendAndGetDevToolsCommand("Network.setCookies", {
+      cookies: seleniumCookiesToCdp(valid),
+    });
+    await driver.get(START_URL);
+    await settlePage(driver, 500);
+    return true;
+  } catch (error) {
+    console.warn(`CDP setCookies failed; falling back to per-domain addCookie: ${error.message}`);
+  }
+
+  // Fallback: group by domain and navigate before adding.
+  const byDomain = new Map();
+  for (const cookie of valid) {
+    const domain = (cookie.domain || "").replace(/^\./, "");
+    if (!domain) continue;
+    if (!byDomain.has(domain)) byDomain.set(domain, []);
+    byDomain.get(domain).push(cookie);
+  }
+
+  for (const [domain, domainCookies] of byDomain) {
+    try {
+      await driver.get(`https://${domain}/`);
+      for (const cookie of domainCookies) {
+        const seleniumCookie = { ...cookie };
+        // Selenium rejects domain cookies that don't match the current host
+        // when the leading-dot form is used inconsistently.
+        try {
+          await driver.manage().addCookie(seleniumCookie);
+        } catch {
+          delete seleniumCookie.domain;
+          await driver.manage().addCookie(seleniumCookie).catch(() => {});
+        }
+      }
+    } catch (error) {
+      console.warn(`Could not restore cookies for ${domain}: ${error.message}`);
+    }
+  }
+
+  await driver.get(START_URL);
+  await settlePage(driver, 500);
+  return true;
 }
 
 async function createDriver() {
@@ -132,6 +242,14 @@ async function createDriver() {
     "--window-size=1440,1200",
     `--user-data-dir=${CHROME_PROFILE_DIR}`
   );
+
+  // macOS local runs: Selenium Manager sometimes fails to locate Chrome unless
+  // the binary path is set explicitly (symptoms: empty "newSession:" then exit).
+  if (process.platform === "darwin") {
+    options.setChromeBinaryPath(
+      "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
+    );
+  }
 
   return new Builder().forBrowser("chrome").setChromeOptions(options).build();
 }
@@ -190,21 +308,6 @@ async function pageDebug(driver) {
       .slice(0, 25)
       .join(" | "),
   };
-}
-
-async function loadCookies(driver) {
-  await driver.get(START_URL);
-  if (!(await exists(AUTH_COOKIES_PATH))) return false;
-
-  const cookies = await readJson(AUTH_COOKIES_PATH);
-  for (const cookie of cookies) {
-    const seleniumCookie = { ...cookie };
-    if (seleniumCookie.expiry && seleniumCookie.expiry < Math.floor(Date.now() / 1000)) {
-      continue;
-    }
-    await driver.manage().addCookie(seleniumCookie);
-  }
-  return true;
 }
 
 async function clickIfVisible(driver, locator, timeout = 5000) {
@@ -478,6 +581,7 @@ async function automateLogin(driver) {
       state: "needs_email_code",
       message,
     });
+    await pauseCheckerForAuth(message);
     await sendOperationalEmail("LSE accommodation checker needs email verification", message);
     const emailCode = await waitForDashboardEmailCode(promptedAt);
     await submitEmailCode(driver, emailCode);
@@ -487,6 +591,7 @@ async function automateLogin(driver) {
       .catch(() => false);
     if (loggedInAfterEmailCode) {
       await saveCookies(driver);
+      await resumeCheckerAfterAuth();
       await writeStatus({
         state: "running",
         message: "LSE login refreshed successfully with email verification; continuing availability check.",
@@ -506,12 +611,14 @@ async function automateLogin(driver) {
     state: "needs_mfa",
     message,
   });
+  await pauseCheckerForAuth(message);
   await sendOperationalEmail("LSE accommodation checker needs Authenticator approval", message);
 
   await waitForMfaApproval(driver, code);
   await clickButtonByText(driver, "yes", 5000).catch(() => false);
   await driver.wait(async () => loggedInAccommodationVisible(driver), 60000);
   await saveCookies(driver);
+  await resumeCheckerAfterAuth();
 
   await writeStatus({
     state: "running",
@@ -701,7 +808,13 @@ async function sendAvailabilityEmail(result) {
 }
 
 async function sendOperationalEmail(subject, text) {
-  await sendMail(subject, text);
+  try {
+    await sendMail(subject, text);
+  } catch (error) {
+    // Never block MFA / login recovery on SMTP misconfig — the dashboard status
+    // and Authenticator push are the primary signals.
+    console.warn(`Operational email skipped: ${redactPii(error.message)}`);
+  }
 }
 
 async function performCheckAttempt(attempt) {
@@ -788,7 +901,23 @@ async function performCheckAttempt(attempt) {
   }
 }
 
+function isAuthChallengeError(error) {
+  const message = errorText(error);
+  return [
+    "microsoft authenticator approval",
+    "email verification code",
+    "needs_mfa",
+    "needs_email_code",
+  ].some((needle) => message.includes(needle));
+}
+
 function isRetryableError(error) {
+  // Never retry MFA / email-code failures: a retry opens a fresh browser and
+  // triggers a brand-new Authenticator number, which is what spammed the user.
+  if (isAuthChallengeError(error)) {
+    return false;
+  }
+
   if (isTransientPageError(error) || isTimeoutError(error) || isLsePortalError(error)) {
     return true;
   }
@@ -801,6 +930,26 @@ function isRetryableError(error) {
     "net::",
     "email send failed",
   ].some((needle) => message.includes(needle));
+}
+
+async function pauseCheckerForAuth(reason) {
+  // Stop follow-up cron runs from starting another Microsoft login while the
+  // current run is waiting for Authenticator / email code.
+  await writeControl({
+    enabled: false,
+    updatedAt: new Date().toISOString(),
+    updatedBy: "checker-auth-pause",
+    pauseReason: reason,
+  });
+}
+
+async function resumeCheckerAfterAuth() {
+  await writeControl({
+    enabled: true,
+    updatedAt: new Date().toISOString(),
+    updatedBy: "checker-auth-resume",
+    pauseReason: null,
+  });
 }
 
 function outcomeStateForError(error) {
@@ -873,6 +1022,7 @@ if (require.main === module) {
 module.exports = {
   BODY_TEXT_ATTEMPTS,
   bodyText,
+  isAuthChallengeError,
   isLsePortalError,
   isLseUnexpectedErrorPage,
   isRetryableError,

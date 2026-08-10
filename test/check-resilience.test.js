@@ -53,6 +53,7 @@ function testLseUnexpectedErrorPageDetection() {
 }
 
 function testRetryableBrowserErrors() {
+  const { isAuthChallengeError } = require("../src/check");
   assert.ok(
     isRetryableError({
       message: "stale element reference: stale element not found",
@@ -66,6 +67,21 @@ function testRetryableBrowserErrors() {
   assert.ok(isRetryableError({ message: "chrome not reachable" }));
   assert.ok(isRetryableError({ message: "Email send failed after 3 attempts: Connection timeout" }));
   assert.ok(!isRetryableError({ message: "LSE_EMAIL and LSE_PASSWORD are required" }));
+  assert.ok(
+    isAuthChallengeError({
+      message: "Timed out waiting for Microsoft Authenticator approval for code 37.",
+    })
+  );
+  assert.ok(
+    !isRetryableError({
+      message: "Timed out waiting for Microsoft Authenticator approval for code 37.",
+    })
+  );
+  assert.ok(
+    !isRetryableError({
+      message: "Timed out waiting for email verification code from the dashboard.",
+    })
+  );
 }
 
 async function testBodyTextRetriesTransientErrors() {
