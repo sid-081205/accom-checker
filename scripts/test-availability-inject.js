@@ -6,7 +6,8 @@ const nodemailer = require("nodemailer");
 const { Builder, By, until } = require("selenium-webdriver");
 const chrome = require("selenium-webdriver/chrome");
 
-const NO_AVAILABILITY_TEXT = "No residences currently have availability";
+const { hasNoAvailabilityBanner } = require("../src/check");
+
 const FIXTURE_PATH = path.resolve("test/fixtures/injected-availability.html");
 
 async function bodyText(driver) {
@@ -26,7 +27,7 @@ async function extractAvailability(driver, checkedAt) {
   return {
     checkedAt,
     url: await driver.getCurrentUrl(),
-    noAvailability: text.includes(NO_AVAILABILITY_TEXT),
+    noAvailability: hasNoAvailabilityBanner(text),
     rooms,
     pageSummary: text
       .split("\n")

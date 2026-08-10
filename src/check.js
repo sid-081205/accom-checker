@@ -17,6 +17,18 @@ const {
 const START_URL =
   "https://lsestudentaccommodation.lse.ac.uk/Pages/EN/Lander.aspx?wf=Hub";
 const NO_AVAILABILITY_TEXT = "No residences currently have availability";
+// Match the empty-state banner and common wording variants. If NONE of these
+// match, treat the page as an availability signal and email.
+const NO_AVAILABILITY_PATTERNS = [
+  /no\s+residences?\s+currently\s+have\s+availability/i,
+  /no\s+residences?\s+currently\s+has\s+availability/i,
+  /no\s+residences?\s+have\s+availability/i,
+  /no\s+residence\s+currently\s+has\s+availability/i,
+  /currently\s+(have|has)\s+no\s+availability/i,
+  /there\s+(are|is)\s+currently\s+no\s+(residences?\s+with\s+)?availability/i,
+  /no\s+residences?\s+currently\s+available/i,
+  /no\s+availability\s+at\s+(this|the)\s+(time|moment)/i,
+];
 const AUTH_COOKIES_PATH = path.resolve(".auth/lse-cookies.json");
 const CHROME_PROFILE_DIR = path.resolve(".auth/chrome-profile");
 const STATE_PATH = path.resolve(".state/last-result.json");
@@ -25,6 +37,14 @@ const CHECK_ATTEMPTS = Number(process.env.CHECK_ATTEMPTS || 3);
 const BODY_TEXT_ATTEMPTS = Number(process.env.BODY_TEXT_ATTEMPTS || 4);
 const SITE_ERROR_RETRY_MS = Number(process.env.SITE_ERROR_RETRY_MS || 30000);
 const LSE_PORTAL_ERROR_PREFIX = "LSE portal unexpected error";
+const SEND_ON_EVERY_HIT = process.env.SEND_ON_EVERY_HIT === "true";
+
+function hasNoAvailabilityBanner(text = "") {
+  const haystack = String(text || "");
+  if (!haystack.trim()) return false;
+  if (haystack.includes(NO_AVAILABILITY_TEXT)) return true;
+  return NO_AVAILABILITY_PATTERNS.some((pattern) => pattern.test(haystack));
+}
 
 // Page navigations / ASP.NET postbacks invalidate DOM handles mid-read.
 const TRANSIENT_PAGE_ERROR_NEEDLES = [
@@ -713,7 +733,7 @@ async function extractAvailability(driver) {
   return {
     checkedAt: new Date().toISOString(),
     url: await driver.getCurrentUrl(),
-    noAvailability: text.includes(NO_AVAILABILITY_TEXT),
+    noAvailability: hasNoAvailabilityBanner(text),
     rooms,
     pageSummary: text
       .split("\n")
@@ -862,7 +882,7 @@ async function performCheckAttempt(attempt) {
     }
 
     const alreadyAlerted =
-      previous?.fingerprint === currentFingerprint && process.env.SEND_ON_EVERY_HIT !== "true";
+      !SEND_ON_EVERY_HIT && previous?.fingerprint === currentFingerprint;
     if (alreadyAlerted) {
       await persistState();
       await writeStatus({
@@ -1022,6 +1042,7 @@ if (require.main === module) {
 module.exports = {
   BODY_TEXT_ATTEMPTS,
   bodyText,
+  hasNoAvailabilityBanner,
   isAuthChallengeError,
   isLsePortalError,
   isLseUnexpectedErrorPage,
@@ -1029,6 +1050,7 @@ module.exports = {
   isTimeoutError,
   isTransientPageError,
   lsePortalError,
+  NO_AVAILABILITY_TEXT,
   outcomeStateForError,
   settlePage,
   waitForDocumentReady,

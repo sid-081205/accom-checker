@@ -2,7 +2,8 @@ const assert = require("assert");
 const fs = require("fs");
 const path = require("path");
 
-const NO_AVAILABILITY_TEXT = "No residences currently have availability";
+const { hasNoAvailabilityBanner, NO_AVAILABILITY_TEXT } = require("../src/check");
+
 const FIXTURE_PATH = path.resolve("test/fixtures/injected-availability.html");
 
 function fingerprint(result) {
@@ -15,7 +16,7 @@ function fingerprint(result) {
 
 function detectFromTextAndRooms(text, rooms) {
   return {
-    noAvailability: text.includes(NO_AVAILABILITY_TEXT),
+    noAvailability: hasNoAvailabilityBanner(text),
     rooms,
     pageSummary: text
       .split("\n")
@@ -58,6 +59,26 @@ function testDetectorFlagsEmptyBanner() {
   assert.strictEqual(fingerprint(result), "no-availability");
 }
 
+function testDetectorFlagsBannerVariants() {
+  const variants = [
+    "No residence currently has availability",
+    "No residences have availability",
+    "Sorry — there are currently no residences with availability.",
+    "Currently have no availability",
+    "No residences currently available",
+    "No availability at this time",
+  ];
+
+  for (const variant of variants) {
+    assert.ok(
+      hasNoAvailabilityBanner(`Select your room type\n${variant}`),
+      `expected empty-state match for: ${variant}`
+    );
+  }
+
+  assert.ok(!hasNoAvailabilityBanner("Select your room type\nRosebery Hall — 1 room left"));
+}
+
 function testMissingBannerWithoutRowsStillAlerts() {
   // Same as production: if the empty-state banner disappears but RoomRow is
   // absent, treat it as a changed page so an email can still fire.
@@ -69,5 +90,6 @@ function testMissingBannerWithoutRowsStillAlerts() {
 testFixtureHasAvailabilityMarkers();
 testDetectorFlagsRoomsAsAvailability();
 testDetectorFlagsEmptyBanner();
+testDetectorFlagsBannerVariants();
 testMissingBannerWithoutRowsStillAlerts();
 console.log("Availability detector unit tests passed.");

@@ -29,7 +29,7 @@ jobs:
       EMAIL_FROM: ${{ secrets.EMAIL_FROM }}
       EMAIL_TO: ${{ secrets.EMAIL_TO }}
       HEADLESS: "true"
-      SEND_ON_EVERY_HIT: "false"
+      SEND_ON_EVERY_HIT: "true"
       MFA_WAIT_MS: "240000"
       LSE_EMAIL: ${{ secrets.LSE_EMAIL }}
       LSE_PASSWORD: ${{ secrets.LSE_PASSWORD }}
