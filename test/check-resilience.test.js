@@ -52,9 +52,22 @@ function testLanderLoadingDetection() {
     })
   );
   assert.ok(
-    !isAccommodationAppCookie({
+    isAccommodationAppCookie({
       domain: "gate.library.lse.ac.uk",
       name: "__Host-shib_idp_session",
+    })
+  );
+  const { isMicrosoftSsoCookie, isStaleIdpRequestPage } = require("../src/check");
+  assert.ok(
+    isMicrosoftSsoCookie({
+      domain: ".login.microsoftonline.com",
+      name: "ESTSAUTH",
+    })
+  );
+  assert.ok(
+    isStaleIdpRequestPage({
+      url: "https://gate.library.lse.ac.uk/idp/profile/SAML2/Redirect/SSO?execution=e1s1",
+      text: "Web Login Service - Stale Request\nYou may be seeing this page because you used the Back button",
     })
   );
   assert.ok(

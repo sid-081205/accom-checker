@@ -111,10 +111,38 @@ function isAccommodationAppCookie(cookie = {}) {
     .replace(/^\./, "")
     .toLowerCase();
   const name = String(cookie.name || "");
-  // Only the accommodation app session is poisoned by concurrent browsers.
-  // Keep Microsoft SSO and LSE IdP/Shibboleth cookies for silent re-entry.
+  // Accommodation ASP.NET session is poisoned by concurrent browsers.
+  // LSE IdP/Shibboleth cookies also go stale and produce "Stale Request".
   if (domain.includes("lsestudentaccommodation.lse.ac.uk")) return true;
-  return /asp\.net_sessionid|__requestverificationtoken/i.test(name);
+  if (domain.includes("gate.library.lse.ac.uk") || domain.includes("idp.lse.ac.uk")) {
+    return true;
+  }
+  return /asp\.net_sessionid|__requestverificationtoken|shib_idp_session|jsessionid/i.test(
+    name
+  );
+}
+
+function isMicrosoftSsoCookie(cookie = {}) {
+  const domain = String(cookie.domain || "")
+    .replace(/^\./, "")
+    .toLowerCase();
+  return (
+    domain.includes("microsoftonline.com") ||
+    domain.includes("microsoftazuread-sso.com") ||
+    domain.includes("microsoft.com") ||
+    domain.includes("live.com") ||
+    domain.includes("msauth.net") ||
+    domain.includes("msftauth.net")
+  );
+}
+
+function isStaleIdpRequestPage({ text = "", title = "", url = "" } = {}) {
+  const haystack = `${title}\n${text}\n${url}`.toLowerCase();
+  return (
+    haystack.includes("stale request") ||
+    haystack.includes("web login service - stale request") ||
+    (haystack.includes("used the back button") && haystack.includes("secure web site"))
+  );
 }
 
 function isLsePortalError(error) {
@@ -315,14 +343,16 @@ async function clearBrowserCookies(driver) {
   }
 }
 
-// Drop poisoned ASP.NET app cookies but keep Microsoft SSO / LSE IdP cookies so
+// Drop poisoned ASP.NET / Shibboleth cookies but keep Microsoft SSO cookies so
 // re-entry often skips a fresh Authenticator prompt after the user browsed the portal.
 async function invalidateAppSession(driver) {
   let retained = [];
   if (await exists(AUTH_COOKIES_PATH)) {
     const cookies = await readJson(AUTH_COOKIES_PATH);
     if (Array.isArray(cookies)) {
-      retained = cookies.filter((cookie) => !isAccommodationAppCookie(cookie));
+      retained = cookies.filter(
+        (cookie) => isMicrosoftSsoCookie(cookie) && !isAccommodationAppCookie(cookie)
+      );
       await writeJson(AUTH_COOKIES_PATH, retained);
     }
   }
@@ -338,7 +368,9 @@ async function stripSavedAppSessionCookies() {
   if (!(await exists(AUTH_COOKIES_PATH))) return 0;
   const cookies = await readJson(AUTH_COOKIES_PATH);
   if (!Array.isArray(cookies)) return 0;
-  const retained = cookies.filter((cookie) => !isAccommodationAppCookie(cookie));
+  const retained = cookies.filter(
+    (cookie) => isMicrosoftSsoCookie(cookie) && !isAccommodationAppCookie(cookie)
+  );
   await writeJson(AUTH_COOKIES_PATH, retained);
   return cookies.length - retained.length;
 }
@@ -682,6 +714,11 @@ async function automateLogin(driver) {
     if (isLanderLoading(debug.text)) {
       throw new Error(
         `Not logged in. LSE lander stuck validating session during login. URL: ${debug.url}. Title: ${debug.title}. Visible text: ${debug.text}`
+      );
+    }
+    if (isStaleIdpRequestPage(debug)) {
+      throw new Error(
+        `Not logged in. LSE identity provider returned a stale request (usually after opening the portal in another browser). URL: ${debug.url}. Title: ${debug.title}. Visible text: ${debug.text}`
       );
     }
     throw new Error(
@@ -1133,6 +1170,7 @@ function isRetryableError(error) {
     "email send failed",
     "could not reach microsoft sign-in",
     "lander stuck validating",
+    "stale request",
   ].some((needle) => message.includes(needle));
 }
 
@@ -1194,7 +1232,9 @@ async function main() {
 
       const portalDown = isLsePortalError(error);
       const poisonedSession =
-        /lander stuck validating|could not reach microsoft sign-in/i.test(error.message || "");
+        /lander stuck validating|could not reach microsoft sign-in|stale request/i.test(
+          error.message || ""
+        );
       if (poisonedSession) {
         const removed = await stripSavedAppSessionCookies();
         if (removed > 0) {
@@ -1247,7 +1287,9 @@ module.exports = {
   isLanderLoading,
   isLsePortalError,
   isLseUnexpectedErrorPage,
+  isMicrosoftSsoCookie,
   isRetryableError,
+  isStaleIdpRequestPage,
   isTimeoutError,
   isTransientPageError,
   lsePortalError,
