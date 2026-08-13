@@ -1,5 +1,6 @@
 const assert = require("assert");
 const {
+  isLanderLoading,
   isLsePortalError,
   isLseUnexpectedErrorPage,
   isRetryableError,
@@ -26,7 +27,22 @@ function testTransientPageErrors() {
       message: "javascript error: synchro: document was unloaded while waiting",
     })
   );
+  assert.ok(
+    isTransientPageError({
+      message: "timeout\nfrom aborted by navigation: loader has changed while resolving nodes",
+    })
+  );
   assert.ok(!isTransientPageError({ message: "Not logged in. Run `npm run login`" }));
+}
+
+function testLanderLoadingDetection() {
+  assert.ok(
+    isLanderLoading(
+      "Skip to content\nLoading...\nValidating and loading your details, please wait...\nHalls Life"
+    )
+  );
+  assert.ok(!isLanderLoading("Select your Year of Stay\nContinue Booking"));
+  assert.ok(!isLanderLoading("Select your room type\nNo residences currently have availability"));
 }
 
 function testTimeoutDetection() {
@@ -115,6 +131,7 @@ async function testBodyTextRetriesTransientErrors() {
 }
 
 testTransientPageErrors();
+testLanderLoadingDetection();
 testTimeoutDetection();
 testLseUnexpectedErrorPageDetection();
 testRetryableBrowserErrors();
