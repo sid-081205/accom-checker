@@ -43,6 +43,31 @@ function testLanderLoadingDetection() {
   );
   assert.ok(!isLanderLoading("Select your Year of Stay\nContinue Booking"));
   assert.ok(!isLanderLoading("Select your room type\nNo residences currently have availability"));
+
+  const { isAccommodationAppCookie } = require("../src/check");
+  assert.ok(
+    isAccommodationAppCookie({
+      domain: "lsestudentaccommodation.lse.ac.uk",
+      name: "ASP.NET_SessionId",
+    })
+  );
+  assert.ok(
+    !isAccommodationAppCookie({
+      domain: "gate.library.lse.ac.uk",
+      name: "__Host-shib_idp_session",
+    })
+  );
+  assert.ok(
+    isRetryableError({
+      message:
+        "Could not reach Microsoft sign-in from LSE identity page. Visible text: Validating and loading your details",
+    })
+  );
+  assert.ok(
+    isRetryableError({
+      message: "Not logged in. LSE lander stuck validating session. URL: x",
+    })
+  );
 }
 
 function testTimeoutDetection() {

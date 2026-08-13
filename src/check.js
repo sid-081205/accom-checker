@@ -106,6 +106,17 @@ function isLanderLoading(text = "") {
   );
 }
 
+function isAccommodationAppCookie(cookie = {}) {
+  const domain = String(cookie.domain || "")
+    .replace(/^\./, "")
+    .toLowerCase();
+  const name = String(cookie.name || "");
+  // Only the accommodation app session is poisoned by concurrent browsers.
+  // Keep Microsoft SSO and LSE IdP/Shibboleth cookies for silent re-entry.
+  if (domain.includes("lsestudentaccommodation.lse.ac.uk")) return true;
+  return /asp\.net_sessionid|__requestverificationtoken/i.test(name);
+}
+
 function isLsePortalError(error) {
   return errorText(error).includes(LSE_PORTAL_ERROR_PREFIX.toLowerCase());
 }
@@ -219,27 +230,10 @@ async function saveCookies(driver) {
   return cookies;
 }
 
-async function loadCookies(driver) {
-  if (!(await exists(AUTH_COOKIES_PATH))) {
-    await driver.get(START_URL);
-    await settlePage(driver, 500);
-    return false;
-  }
-
-  const cookies = await readJson(AUTH_COOKIES_PATH);
-  if (!Array.isArray(cookies) || cookies.length === 0) {
-    await driver.get(START_URL);
-    await settlePage(driver, 500);
-    return false;
-  }
-
+async function applyCookies(driver, cookies) {
   const now = Math.floor(Date.now() / 1000);
-  const valid = cookies.filter((cookie) => !cookie.expiry || cookie.expiry > now);
-  if (valid.length === 0) {
-    await driver.get(START_URL);
-    await settlePage(driver, 500);
-    return false;
-  }
+  const valid = (cookies || []).filter((cookie) => !cookie.expiry || cookie.expiry > now);
+  if (valid.length === 0) return false;
 
   // Set cookies on a blank document FIRST. Visiting the LSE lander before
   // setCookies races the ASP.NET "Validating and loading..." navigation and
@@ -250,8 +244,6 @@ async function loadCookies(driver) {
     await driver.sendAndGetDevToolsCommand("Network.setCookies", {
       cookies: seleniumCookiesToCdp(valid),
     });
-    await driver.get(START_URL);
-    await settlePage(driver, 500);
     return true;
   } catch (error) {
     console.warn(`CDP setCookies failed; falling back to per-domain addCookie: ${error.message}`);
@@ -286,9 +278,69 @@ async function loadCookies(driver) {
     }
   }
 
+  return true;
+}
+
+async function loadCookies(driver) {
+  if (!(await exists(AUTH_COOKIES_PATH))) {
+    await driver.get(START_URL);
+    await settlePage(driver, 500);
+    return false;
+  }
+
+  const cookies = await readJson(AUTH_COOKIES_PATH);
+  if (!Array.isArray(cookies) || cookies.length === 0) {
+    await driver.get(START_URL);
+    await settlePage(driver, 500);
+    return false;
+  }
+
+  const applied = await applyCookies(driver, cookies);
+  if (!applied) {
+    await driver.get(START_URL);
+    await settlePage(driver, 500);
+    return false;
+  }
+
   await driver.get(START_URL);
   await settlePage(driver, 500);
   return true;
+}
+
+async function clearBrowserCookies(driver) {
+  try {
+    await driver.sendAndGetDevToolsCommand("Network.clearBrowserCookies", {});
+  } catch {
+    await driver.manage().deleteAllCookies().catch(() => {});
+  }
+}
+
+// Drop poisoned ASP.NET app cookies but keep Microsoft SSO / LSE IdP cookies so
+// re-entry often skips a fresh Authenticator prompt after the user browsed the portal.
+async function invalidateAppSession(driver) {
+  let retained = [];
+  if (await exists(AUTH_COOKIES_PATH)) {
+    const cookies = await readJson(AUTH_COOKIES_PATH);
+    if (Array.isArray(cookies)) {
+      retained = cookies.filter((cookie) => !isAccommodationAppCookie(cookie));
+      await writeJson(AUTH_COOKIES_PATH, retained);
+    }
+  }
+
+  await clearBrowserCookies(driver);
+  if (retained.length > 0) {
+    await applyCookies(driver, retained);
+  }
+  return retained.length;
+}
+
+async function stripSavedAppSessionCookies() {
+  if (!(await exists(AUTH_COOKIES_PATH))) return 0;
+  const cookies = await readJson(AUTH_COOKIES_PATH);
+  if (!Array.isArray(cookies)) return 0;
+  const retained = cookies.filter((cookie) => !isAccommodationAppCookie(cookie));
+  await writeJson(AUTH_COOKIES_PATH, retained);
+  return cookies.length - retained.length;
 }
 
 async function createDriver() {
@@ -590,8 +642,21 @@ async function automateLogin(driver) {
     message: "Saved LSE session is missing or expired; starting automated login.",
   });
 
+  // Always drop the accommodation ASP.NET session before login recovery.
+  // Opening the portal in another browser poisons it and leaves the lander on
+  // "Validating and loading your details" if we reuse the same SessionId.
+  await invalidateAppSession(driver);
+
   await driver.get(START_URL);
+  await waitForLanderReady(driver, Math.min(LANDER_READY_MS, 25000)).catch((error) => {
+    if (error.message.includes("Not logged in") || isLsePortalError(error)) {
+      return "";
+    }
+    throw error;
+  });
+
   await clickButtonByText(driver, "login", 8000).catch(() => false);
+  await waitForLanderReady(driver, 15000).catch(() => null);
   if (await loggedInAccommodationVisible(driver).catch(() => false)) {
     await saveCookies(driver);
     await writeStatus({
@@ -611,8 +676,14 @@ async function automateLogin(driver) {
     return;
   }
 
-  if (!clickedStaff && !(await driver.getCurrentUrl()).includes("login.microsoftonline.com")) {
+  const currentUrl = await driver.getCurrentUrl().catch(() => "");
+  if (!clickedStaff && !currentUrl.includes("login.microsoftonline.com")) {
     const debug = await pageDebug(driver);
+    if (isLanderLoading(debug.text)) {
+      throw new Error(
+        `Not logged in. LSE lander stuck validating session during login. URL: ${debug.url}. Title: ${debug.title}. Visible text: ${debug.text}`
+      );
+    }
     throw new Error(
       `Could not reach Microsoft sign-in from LSE identity page. URL: ${debug.url}. Title: ${debug.title}. Visible text: ${debug.text}`
     );
@@ -955,7 +1026,13 @@ async function performCheckAttempt(attempt) {
     try {
       await reachAvailabilityPage(driver);
     } catch (error) {
-      if (!error.message.includes("Not logged in")) throw error;
+      const needsLogin =
+        error.message.includes("Not logged in") ||
+        /could not reach microsoft sign-in/i.test(error.message || "");
+      if (!needsLogin) throw error;
+      console.warn(
+        `Session recovery: clearing accommodation ASP.NET cookies before login (${redactPii(error.message)})`
+      );
       await automateLogin(driver);
       await reachAvailabilityPage(driver);
     }
@@ -1054,6 +1131,8 @@ function isRetryableError(error) {
     "target window already closed",
     "net::",
     "email send failed",
+    "could not reach microsoft sign-in",
+    "lander stuck validating",
   ].some((needle) => message.includes(needle));
 }
 
@@ -1114,16 +1193,31 @@ async function main() {
       }
 
       const portalDown = isLsePortalError(error);
+      const poisonedSession =
+        /lander stuck validating|could not reach microsoft sign-in/i.test(error.message || "");
+      if (poisonedSession) {
+        const removed = await stripSavedAppSessionCookies();
+        if (removed > 0) {
+          console.warn(
+            `Stripped ${removed} poisoned accommodation cookie(s) before fresh-browser retry.`
+          );
+        }
+      }
+
       const message = portalDown
         ? `Attempt ${attempt}/${CHECK_ATTEMPTS} hit an LSE portal error page; waiting before a fresh browser retry. ${error.message}`
-        : `Attempt ${attempt}/${CHECK_ATTEMPTS} failed with a retryable browser/page error; retrying with a fresh browser. ${error.message}`;
+        : poisonedSession
+          ? `Attempt ${attempt}/${CHECK_ATTEMPTS} hit a poisoned LSE session (often after opening the portal in another browser); clearing app cookies and retrying. ${error.message}`
+          : `Attempt ${attempt}/${CHECK_ATTEMPTS} failed with a retryable browser/page error; retrying with a fresh browser. ${error.message}`;
       console.warn(redactPii(message));
       await writeStatus({
         state: "retrying",
         message,
         error: error.stack || error.message,
       });
-      await sleep(portalDown ? SITE_ERROR_RETRY_MS * attempt : 5000 * attempt);
+      await sleep(
+        portalDown || poisonedSession ? SITE_ERROR_RETRY_MS * attempt : 5000 * attempt
+      );
     }
   }
 
@@ -1148,6 +1242,7 @@ module.exports = {
   BODY_TEXT_ATTEMPTS,
   bodyText,
   hasNoAvailabilityBanner,
+  isAccommodationAppCookie,
   isAuthChallengeError,
   isLanderLoading,
   isLsePortalError,

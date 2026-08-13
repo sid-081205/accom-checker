@@ -17,8 +17,9 @@ concurrency:
 jobs:
   check:
     runs-on: ubuntu-latest
-    # Includes up to ~90s of backoff when LSE serves its Unexpected Error page.
-    timeout-minutes: 12
+    # Includes lander settle waits + backoff when LSE serves Unexpected Error /
+    # poisoned-session pages after the portal was opened in another browser.
+    timeout-minutes: 15
 
     env:
       SMTP_HOST: ${{ secrets.SMTP_HOST }}
