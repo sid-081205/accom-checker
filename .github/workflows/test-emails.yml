@@ -2,6 +2,10 @@ name: Send test emails (summary + availability inject)
 
 on:
   workflow_dispatch:
+  # Temporary: send a live test email for this PR, then remove after the run.
+  push:
+    branches:
+      - cursor/availability-email-extra-recipients-5fde
 
 permissions:
   contents: read
