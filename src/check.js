@@ -934,6 +934,65 @@ async function reachAvailabilityPage(driver) {
   }
 }
 
+// UI chrome inside a .RoomRow that is not room information.
+const ROOM_ROW_NOISE_LINES = new Set(
+  [
+    "add to comparison",
+    "view comparisons",
+    "images",
+    "facilities",
+    "more info",
+    "map",
+    "book now",
+  ].map((line) => line.toLowerCase())
+);
+
+// Turn a .RoomRow innerText blob into { name, fields, lines } where name is
+// the residence/hall and fields are the "Key: Value" attributes shown on the
+// row (Room type, Contract length, Weekly price, ...).
+function parseRoomDetails(roomText = "") {
+  const lines = String(roomText || "")
+    .split("\n")
+    .map((line) => line.trim())
+    .filter((line) => line && !ROOM_ROW_NOISE_LINES.has(line.toLowerCase()));
+
+  const fields = {};
+  let name = "";
+  for (const line of lines) {
+    const match = line.match(/^([^:]{2,40}):\s*(.+)$/);
+    if (match) {
+      fields[match[1].trim()] = match[2].trim();
+    } else if (!name) {
+      name = line;
+    }
+  }
+
+  return { name: name || "Unknown residence", fields, lines };
+}
+
+function roomLabel(room) {
+  const { name, fields } = parseRoomDetails(room.text);
+  const type = fields["Room type"];
+  const contract = fields["Contract length"];
+  const price = fields["Weekly price"];
+  const detail = [type, contract, price && `${price}/wk`].filter(Boolean).join(", ");
+  return detail ? `${name} — ${detail}` : name;
+}
+
+// Short residence list for the email subject, e.g.
+// "Sidney Webb House ×2, High Holborn".
+function summarizeRoomsForSubject(rooms = []) {
+  if (rooms.length === 0) return "";
+  const counts = new Map();
+  for (const room of rooms) {
+    const { name } = parseRoomDetails(room.text);
+    counts.set(name, (counts.get(name) || 0) + 1);
+  }
+  return [...counts.entries()]
+    .map(([name, count]) => (count > 1 ? `${name} ×${count}` : name))
+    .join(", ");
+}
+
 async function extractAvailability(driver) {
   const text = await bodyText(driver);
   const rooms = await driver.executeScript(() =>
@@ -965,24 +1024,51 @@ function fingerprint(result) {
   return `changed-page:${result.pageSummary}`;
 }
 
+function availabilityEmailSubject(result) {
+  const summary = summarizeRoomsForSubject(result.rooms);
+  if (summary) {
+    // Room list in the subject: shows what's available at a glance and gives
+    // different availability a different subject, so Gmail starts a new
+    // thread when the rooms change instead of burying every alert in one.
+    return `LSE rooms available: ${summary}`;
+  }
+  return "LSE accommodation page changed (possible availability)";
+}
+
 function formatAvailabilityEmail(result) {
-  const roomDetails =
-    result.rooms.length > 0
-      ? result.rooms
-          .map((room, index) => {
-            const dataLines = Object.entries(room.data)
-              .map(([key, value]) => `${key}: ${value}`)
-              .join("\n");
-            return [`Room ${index + 1}`, room.text, dataLines].filter(Boolean).join("\n");
-          })
-          .join("\n\n---\n\n")
-      : `The usual no-availability text disappeared, but no .RoomRow entries were found.\n\nVisible page summary:\n${result.pageSummary}`;
+  if (result.rooms.length === 0) {
+    return [
+      "The LSE accommodation page changed but no room rows could be parsed.",
+      "Open the booking page to check manually:",
+      result.url,
+      "",
+      `Checked at: ${result.checkedAt}`,
+      "",
+      "Visible page summary:",
+      result.pageSummary,
+    ].join("\n");
+  }
+
+  const overview = result.rooms.map((room, index) => `  ${index + 1}. ${roomLabel(room)}`);
+
+  const roomDetails = result.rooms
+    .map((room, index) => {
+      const { name, fields } = parseRoomDetails(room.text);
+      const fieldLines = Object.entries(fields).map(([key, value]) => `${key}: ${value}`);
+      const dataLines = Object.entries(room.data).map(([key, value]) => `${key}: ${value}`);
+      return [`Room ${index + 1}: ${name}`, ...fieldLines, ...dataLines].join("\n");
+    })
+    .join("\n\n---\n\n");
 
   return [
-    "Possible LSE accommodation availability found.",
+    `${result.rooms.length} room(s) available on the LSE accommodation portal:`,
     "",
+    ...overview,
+    "",
+    `Book here: ${result.url}`,
     `Checked at: ${result.checkedAt}`,
-    `URL: ${result.url}`,
+    "",
+    "Full details:",
     "",
     roomDetails,
   ].join("\n");
@@ -1037,7 +1123,7 @@ async function sendMail(subject, text) {
 }
 
 async function sendAvailabilityEmail(result) {
-  await sendMail("Possible LSE accommodation availability", formatAvailabilityEmail(result));
+  await sendMail(availabilityEmailSubject(result), formatAvailabilityEmail(result));
 }
 
 async function sendOperationalEmail(subject, text) {
@@ -1100,13 +1186,15 @@ async function performCheckAttempt(attempt) {
       return;
     }
 
+    const roomSummary = summarizeRoomsForSubject(result.rooms) || "page changed, no rooms parsed";
+
     const alreadyAlerted =
       !SEND_ON_EVERY_HIT && previous?.fingerprint === currentFingerprint;
     if (alreadyAlerted) {
       await persistState();
       await writeStatus({
         state: "availability_found",
-        message: "Availability signal is still present; duplicate email skipped.",
+        message: `Availability still present (${roomSummary}); duplicate email skipped.`,
         checkedAt: result.checkedAt,
         noAvailability: false,
         roomCount: result.rooms.length,
@@ -1114,7 +1202,7 @@ async function performCheckAttempt(attempt) {
       });
       await recordCheckOutcome(
         "availability_found",
-        "Availability signal is still present; duplicate email skipped."
+        `Availability still present (${roomSummary}); duplicate email skipped.`
       );
       console.log(`[${result.checkedAt}] Availability signal unchanged; email skipped.`);
       return;
@@ -1127,13 +1215,13 @@ async function performCheckAttempt(attempt) {
     await persistState();
     await writeStatus({
       state: "availability_found",
-      message: "Availability signal found and email sent.",
+      message: `Availability found (${roomSummary}); email sent.`,
       checkedAt: result.checkedAt,
       noAvailability: false,
       roomCount: result.rooms.length,
       summary: result.pageSummary,
     });
-    await recordCheckOutcome("availability_found", "Availability signal found and email sent.");
+    await recordCheckOutcome("availability_found", `Availability found (${roomSummary}); email sent.`);
     console.log(`[${result.checkedAt}] Availability signal found; email sent.`);
   } finally {
     await driver.quit();
@@ -1279,12 +1367,17 @@ if (require.main === module) {
 }
 
 module.exports = {
+  availabilityEmailSubject,
   BODY_TEXT_ATTEMPTS,
   bodyText,
+  formatAvailabilityEmail,
   hasNoAvailabilityBanner,
   isAccommodationAppCookie,
   isAuthChallengeError,
   isLanderLoading,
+  parseRoomDetails,
+  roomLabel,
+  summarizeRoomsForSubject,
   isLsePortalError,
   isLseUnexpectedErrorPage,
   isMicrosoftSsoCookie,
