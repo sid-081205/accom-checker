@@ -36,6 +36,7 @@ const MFA_WAIT_MS = Number(process.env.MFA_WAIT_MS || 240000);
 const CHECK_ATTEMPTS = Number(process.env.CHECK_ATTEMPTS || 3);
 const BODY_TEXT_ATTEMPTS = Number(process.env.BODY_TEXT_ATTEMPTS || 4);
 const SITE_ERROR_RETRY_MS = Number(process.env.SITE_ERROR_RETRY_MS || 30000);
+const LANDER_READY_MS = Number(process.env.LANDER_READY_MS || 45000);
 const LSE_PORTAL_ERROR_PREFIX = "LSE portal unexpected error";
 const SEND_ON_EVERY_HIT = process.env.SEND_ON_EVERY_HIT === "true";
 
@@ -55,6 +56,8 @@ const TRANSIENT_PAGE_ERROR_NEEDLES = [
   "frame was detached",
   "detached",
   "node with given id does not belong",
+  "aborted by navigation",
+  "loader has changed",
 ];
 
 async function sleep(ms) {
@@ -80,6 +83,26 @@ function isLseUnexpectedErrorPage({ text = "", title = "" } = {}) {
     haystack.includes("an error has occurred") ||
     haystack.includes("unexpected error") ||
     haystack.includes("please close your browser and retry")
+  );
+}
+
+function isLanderLoading(text = "") {
+  const haystack = String(text || "").toLowerCase();
+  if (!haystack.trim()) return false;
+  // Finished lander / booking pages are never "still loading".
+  if (
+    haystack.includes("select your year of stay") ||
+    haystack.includes("continue booking") ||
+    haystack.includes("select your room type") ||
+    haystack.includes("available rooms") ||
+    haystack.includes("please login")
+  ) {
+    return false;
+  }
+  return (
+    haystack.includes("validating and loading your details") ||
+    haystack.includes("loading your details") ||
+    (haystack.includes("loading...") && haystack.includes("please wait"))
   );
 }
 
@@ -162,19 +185,23 @@ function cdpCookiesToSelenium(cdpCookies = []) {
 }
 
 function seleniumCookiesToCdp(cookies = []) {
-  return cookies.map((cookie) => {
-    const cdpCookie = {
-      name: cookie.name,
-      value: cookie.value,
-      path: cookie.path || "/",
-      domain: cookie.domain,
-      secure: Boolean(cookie.secure),
-      httpOnly: Boolean(cookie.httpOnly),
-    };
-    if (cookie.sameSite) cdpCookie.sameSite = cookie.sameSite;
-    if (cookie.expiry) cdpCookie.expires = Number(cookie.expiry);
-    return cdpCookie;
-  });
+  return cookies
+    .map((cookie) => {
+      const domain = cookie.domain || "";
+      if (!cookie.name || cookie.value == null || !domain) return null;
+      const cdpCookie = {
+        name: cookie.name,
+        value: cookie.value,
+        path: cookie.path || "/",
+        domain,
+        secure: Boolean(cookie.secure),
+        httpOnly: Boolean(cookie.httpOnly),
+      };
+      if (cookie.sameSite) cdpCookie.sameSite = cookie.sameSite;
+      if (cookie.expiry) cdpCookie.expires = Number(cookie.expiry);
+      return cdpCookie;
+    })
+    .filter(Boolean);
 }
 
 async function saveCookies(driver) {
@@ -193,17 +220,33 @@ async function saveCookies(driver) {
 }
 
 async function loadCookies(driver) {
-  await driver.get(START_URL);
-  if (!(await exists(AUTH_COOKIES_PATH))) return false;
+  if (!(await exists(AUTH_COOKIES_PATH))) {
+    await driver.get(START_URL);
+    await settlePage(driver, 500);
+    return false;
+  }
 
   const cookies = await readJson(AUTH_COOKIES_PATH);
-  if (!Array.isArray(cookies) || cookies.length === 0) return false;
+  if (!Array.isArray(cookies) || cookies.length === 0) {
+    await driver.get(START_URL);
+    await settlePage(driver, 500);
+    return false;
+  }
 
   const now = Math.floor(Date.now() / 1000);
   const valid = cookies.filter((cookie) => !cookie.expiry || cookie.expiry > now);
-  if (valid.length === 0) return false;
+  if (valid.length === 0) {
+    await driver.get(START_URL);
+    await settlePage(driver, 500);
+    return false;
+  }
 
+  // Set cookies on a blank document FIRST. Visiting the LSE lander before
+  // setCookies races the ASP.NET "Validating and loading..." navigation and
+  // aborts CDP with "loader has changed while resolving nodes".
+  await driver.get("about:blank");
   try {
+    await driver.sendAndGetDevToolsCommand("Network.enable", {});
     await driver.sendAndGetDevToolsCommand("Network.setCookies", {
       cookies: seleniumCookiesToCdp(valid),
     });
@@ -226,6 +269,7 @@ async function loadCookies(driver) {
   for (const [domain, domainCookies] of byDomain) {
     try {
       await driver.get(`https://${domain}/`);
+      await settlePage(driver, 300);
       for (const cookie of domainCookies) {
         const seleniumCookie = { ...cookie };
         // Selenium rejects domain cookies that don't match the current host
@@ -646,23 +690,77 @@ async function automateLogin(driver) {
   });
 }
 
+async function waitForLanderReady(driver, timeoutMs = LANDER_READY_MS) {
+  const startedAt = Date.now();
+  let lastText = "";
+  while (Date.now() - startedAt < timeoutMs) {
+    try {
+      lastText = await bodyText(driver);
+      await assertNotLseUnexpectedError(driver, lastText);
+      if (!isLanderLoading(lastText)) {
+        return lastText;
+      }
+    } catch (error) {
+      if (isLsePortalError(error)) throw error;
+      if (!isTransientPageError(error) && !isTimeoutError(error)) throw error;
+    }
+    await sleep(1500);
+  }
+
+  const debug = await pageDebug(driver);
+  if (isLanderLoading(debug.text) || isLanderLoading(lastText)) {
+    // One refresh before declaring the session dead — LSE sometimes leaves the
+    // validating spinner up until a reload finishes the postback.
+    await driver.navigate().refresh().catch(async () => driver.get(START_URL));
+    await settlePage(driver, 1200);
+    const refreshDeadline = Date.now() + 20000;
+    while (Date.now() < refreshDeadline) {
+      const refreshed = await bodyText(driver).catch(() => "");
+      try {
+        await assertNotLseUnexpectedError(driver, refreshed);
+      } catch (error) {
+        if (isLsePortalError(error)) throw error;
+      }
+      if (!isLanderLoading(refreshed)) {
+        return refreshed;
+      }
+      await sleep(1500);
+    }
+
+    const after = await pageDebug(driver);
+    // Stuck validating usually means the restored SSO session is half-dead.
+    // Phrase includes "Not logged in" so performCheckAttempt refreshes login.
+    throw new Error(
+      `Not logged in. LSE lander stuck validating session. URL: ${after.url}. Title: ${after.title}. Visible text: ${after.text}`
+    );
+  }
+
+  return lastText || debug.text || "";
+}
+
 async function loadAvailabilityLander(driver) {
-  await driver.get(START_URL);
+  // loadCookies already navigates to START_URL when cookies were restored.
+  // Only re-get when we are not already on the lander.
+  const currentUrl = await driver.getCurrentUrl().catch(() => "");
+  if (!currentUrl.includes("lsestudentaccommodation.lse.ac.uk")) {
+    await driver.get(START_URL);
+  }
   await settlePage(driver);
-  let text;
+
   try {
-    text = await bodyText(driver);
+    return await waitForLanderReady(driver);
   } catch (error) {
+    if (isLsePortalError(error) || error.message.includes("Not logged in")) {
+      throw error;
+    }
     // One hard reload when the lander keeps navigating during the first read.
     if (!isTransientPageError(error) && !isTimeoutError(error)) {
       throw error;
     }
     await driver.get(START_URL);
     await settlePage(driver, 1200);
-    text = await bodyText(driver);
+    return waitForLanderReady(driver);
   }
-  await assertNotLseUnexpectedError(driver, text);
-  return text;
 }
 
 async function reachAvailabilityPage(driver) {
@@ -702,18 +800,25 @@ async function reachAvailabilityPage(driver) {
       try {
         const current = await bodyText(driver);
         await assertNotLseUnexpectedError(driver, current);
+        if (isLanderLoading(current)) return false;
         return current.includes("Select your room type");
       } catch (error) {
         if (isLsePortalError(error)) throw error;
-        if (isTransientPageError(error)) return false;
+        if (isTransientPageError(error) || isTimeoutError(error)) return false;
         throw error;
       }
-    }, 20000);
+    }, 30000);
   } catch (error) {
     if (isLsePortalError(error)) throw error;
+    if (error.message.includes("Not logged in")) throw error;
     const debug = await pageDebug(driver);
     if (isLseUnexpectedErrorPage(debug)) {
       throw lsePortalError(debug);
+    }
+    if (isLanderLoading(debug.text)) {
+      throw new Error(
+        `Not logged in. LSE lander stuck validating session. URL: ${debug.url}. Title: ${debug.title}. Visible text: ${debug.text}`
+      );
     }
     throw new Error(
       `Timed out waiting for availability page. URL: ${debug.url}. Title: ${debug.title}. Visible text: ${debug.text}`
@@ -1044,6 +1149,7 @@ module.exports = {
   bodyText,
   hasNoAvailabilityBanner,
   isAuthChallengeError,
+  isLanderLoading,
   isLsePortalError,
   isLseUnexpectedErrorPage,
   isRetryableError,
