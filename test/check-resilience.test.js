@@ -1,5 +1,10 @@
 const assert = require("assert");
 const {
+  availabilityEmailSubject,
+  formatAvailabilityEmail,
+  parseRoomDetails,
+  roomLabel,
+  summarizeRoomsForSubject,
   isLanderLoading,
   isLsePortalError,
   isLseUnexpectedErrorPage,
@@ -168,6 +173,85 @@ async function testBodyTextRetriesTransientErrors() {
   assert.strictEqual(scriptCalls, 3);
 }
 
+// Real .RoomRow innerText captured from the live portal on 2026-08-13.
+const SIDNEY_WEBB_ROOM_TEXT = [
+  "Add to comparison",
+  "Sidney Webb House",
+  "Room type: Single Ensuite room",
+  "Contract length: 40 weeks",
+  "Room gender: Any Gender",
+  "Carpet: No",
+  "Bed: Standard Bed",
+  "Catering: Self-catered",
+  "Weekly price: £273.35",
+  "Total price: £10,894.95",
+  "Images",
+  "Facilities",
+  "More Info",
+  "Map",
+  "Book now",
+].join("\n");
+
+const HIGH_HOLBORN_ROOM_TEXT = [
+  "Add to comparison",
+  "High Holborn",
+  "Room type: Single room",
+  "Contract length: 38 weeks",
+  "Weekly price: £374.00",
+  "Book now",
+].join("\n");
+
+function testRoomParsing() {
+  const parsed = parseRoomDetails(SIDNEY_WEBB_ROOM_TEXT);
+  assert.strictEqual(parsed.name, "Sidney Webb House");
+  assert.strictEqual(parsed.fields["Room type"], "Single Ensuite room");
+  assert.strictEqual(parsed.fields["Weekly price"], "£273.35");
+
+  assert.strictEqual(
+    roomLabel({ text: SIDNEY_WEBB_ROOM_TEXT }),
+    "Sidney Webb House — Single Ensuite room, 40 weeks, £273.35/wk"
+  );
+}
+
+function testAvailabilityEmailContent() {
+  const result = {
+    checkedAt: "2026-08-13T10:26:00.000Z",
+    url: "https://lsestudentaccommodation.lse.ac.uk/Pages/EN/Room.aspx",
+    noAvailability: false,
+    rooms: [
+      { text: SIDNEY_WEBB_ROOM_TEXT, data: {} },
+      { text: SIDNEY_WEBB_ROOM_TEXT, data: {} },
+      { text: HIGH_HOLBORN_ROOM_TEXT, data: {} },
+    ],
+    pageSummary: "Select your room type",
+  };
+
+  assert.strictEqual(
+    summarizeRoomsForSubject(result.rooms),
+    "Sidney Webb House ×2, High Holborn"
+  );
+  assert.strictEqual(
+    availabilityEmailSubject(result),
+    "LSE rooms available: Sidney Webb House ×2, High Holborn"
+  );
+
+  const body = formatAvailabilityEmail(result);
+  assert.ok(body.includes("3 room(s) available"));
+  assert.ok(body.includes("1. Sidney Webb House — Single Ensuite room, 40 weeks, £273.35/wk"));
+  assert.ok(body.includes("3. High Holborn — Single room, 38 weeks, £374.00/wk"));
+  assert.ok(body.includes("Book here: https://lsestudentaccommodation.lse.ac.uk/Pages/EN/Room.aspx"));
+  assert.ok(!body.includes("Add to comparison"), "UI noise must be stripped from email");
+
+  const emptyResult = { ...result, rooms: [] };
+  assert.strictEqual(
+    availabilityEmailSubject(emptyResult),
+    "LSE accommodation page changed (possible availability)"
+  );
+  assert.ok(formatAvailabilityEmail(emptyResult).includes("no room rows could be parsed"));
+}
+
+testRoomParsing();
+testAvailabilityEmailContent();
 testTransientPageErrors();
 testLanderLoadingDetection();
 testTimeoutDetection();
