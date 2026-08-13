@@ -1,6 +1,8 @@
 const assert = require("assert");
 const {
+  availabilityEmailRecipients,
   availabilityEmailSubject,
+  EXTRA_AVAILABILITY_EMAIL_TO,
   formatAvailabilityEmail,
   parseRoomDetails,
   roomLabel,
@@ -250,8 +252,21 @@ function testAvailabilityEmailContent() {
   assert.ok(formatAvailabilityEmail(emptyResult).includes("no room rows could be parsed"));
 }
 
+function testAvailabilityEmailRecipients() {
+  assert.deepStrictEqual(availabilityEmailRecipients("alerts@example.com"), [
+    "alerts@example.com",
+    ...EXTRA_AVAILABILITY_EMAIL_TO,
+  ]);
+
+  const deduped = availabilityEmailRecipients(
+    ` ${EXTRA_AVAILABILITY_EMAIL_TO[0]},alerts@example.com `
+  );
+  assert.deepStrictEqual(deduped, ["nitin.gianchandani@gmail.com", "alerts@example.com", "nitin.gianchandani@keysight.com"]);
+}
+
 testRoomParsing();
 testAvailabilityEmailContent();
+testAvailabilityEmailRecipients();
 testTransientPageErrors();
 testLanderLoadingDetection();
 testTimeoutDetection();

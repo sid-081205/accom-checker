@@ -1076,7 +1076,31 @@ function formatAvailabilityEmail(result) {
 
 const MAIL_SEND_ATTEMPTS = Number(process.env.MAIL_SEND_ATTEMPTS || 3);
 
-async function sendMail(subject, text) {
+const EXTRA_AVAILABILITY_EMAIL_TO = [
+  "nitin.gianchandani@gmail.com",
+  "nitin.gianchandani@keysight.com",
+];
+
+function parseEmailList(value = "") {
+  return String(value)
+    .split(/[,;]+/)
+    .map((email) => email.trim())
+    .filter(Boolean);
+}
+
+function availabilityEmailRecipients(emailTo = process.env.EMAIL_TO) {
+  const seen = new Set();
+  const recipients = [];
+  for (const email of [...parseEmailList(emailTo), ...EXTRA_AVAILABILITY_EMAIL_TO]) {
+    const key = email.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    recipients.push(email);
+  }
+  return recipients;
+}
+
+async function sendMail(subject, text, { to } = {}) {
   const required = ["SMTP_HOST", "SMTP_PORT", "SMTP_USER", "SMTP_PASS", "EMAIL_TO"];
   const missing = required.filter((key) => !process.env[key]);
   if (missing.length > 0) {
@@ -1099,7 +1123,7 @@ async function sendMail(subject, text) {
     try {
       await transporter.sendMail({
         from: process.env.EMAIL_FROM || process.env.SMTP_USER,
-        to: process.env.EMAIL_TO,
+        to: to || process.env.EMAIL_TO,
         subject,
         text,
       });
@@ -1123,7 +1147,9 @@ async function sendMail(subject, text) {
 }
 
 async function sendAvailabilityEmail(result) {
-  await sendMail(availabilityEmailSubject(result), formatAvailabilityEmail(result));
+  await sendMail(availabilityEmailSubject(result), formatAvailabilityEmail(result), {
+    to: availabilityEmailRecipients().join(", "),
+  });
 }
 
 async function sendOperationalEmail(subject, text) {
@@ -1367,9 +1393,11 @@ if (require.main === module) {
 }
 
 module.exports = {
+  availabilityEmailRecipients,
   availabilityEmailSubject,
   BODY_TEXT_ATTEMPTS,
   bodyText,
+  EXTRA_AVAILABILITY_EMAIL_TO,
   formatAvailabilityEmail,
   hasNoAvailabilityBanner,
   isAccommodationAppCookie,

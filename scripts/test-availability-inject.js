@@ -6,7 +6,7 @@ const nodemailer = require("nodemailer");
 const { Builder, By, until } = require("selenium-webdriver");
 const chrome = require("selenium-webdriver/chrome");
 
-const { hasNoAvailabilityBanner } = require("../src/check");
+const { availabilityEmailRecipients, hasNoAvailabilityBanner } = require("../src/check");
 
 const FIXTURE_PATH = path.resolve("test/fixtures/injected-availability.html");
 
@@ -82,7 +82,7 @@ async function sendMail(subject, text) {
 
   await transporter.sendMail({
     from: process.env.EMAIL_FROM || process.env.SMTP_USER,
-    to: process.env.EMAIL_TO,
+    to: availabilityEmailRecipients().join(", "),
     subject,
     text,
   });
