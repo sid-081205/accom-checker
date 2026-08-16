@@ -9,8 +9,8 @@
 // Required env vars:
 //   CRONJOB_API_KEY       API key from https://console.cron-job.org (Settings -> API)
 //   GITHUB_DISPATCH_TOKEN GitHub PAT with `actions: write` on the repo
+//   GITHUB_REPO           owner/repo of THIS project (no baked-in default)
 // Optional env vars:
-//   GITHUB_REPO             owner/repo (default sid-081205/accom-checker)
 //   GITHUB_REF              git ref to dispatch (default master)
 //   SUMMARY_HOUR            Hour (Europe/London) to send the daily summary (default 23)
 //   SUMMARY_MINUTE          Minute to send the daily summary (default 55)
@@ -33,7 +33,7 @@ function requireEnv(name) {
 
 const apiKey = requireEnv("CRONJOB_API_KEY");
 const githubToken = requireEnv("GITHUB_DISPATCH_TOKEN");
-const repo = process.env.GITHUB_REPO || "sid-081205/accom-checker";
+const repo = requireEnv("GITHUB_REPO");
 const ref = process.env.GITHUB_REF || "master";
 const timezone = process.env.TIMEZONE || "Europe/London";
 const summaryHour = Number(process.env.SUMMARY_HOUR ?? 23);

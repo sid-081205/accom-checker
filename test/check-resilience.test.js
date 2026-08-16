@@ -2,7 +2,7 @@ const assert = require("assert");
 const {
   availabilityEmailRecipients,
   availabilityEmailSubject,
-  EXTRA_AVAILABILITY_EMAIL_TO,
+  extraAvailabilityEmailTo,
   formatAvailabilityEmail,
   parseRoomDetails,
   roomLabel,
@@ -253,15 +253,26 @@ function testAvailabilityEmailContent() {
 }
 
 function testAvailabilityEmailRecipients() {
-  assert.deepStrictEqual(availabilityEmailRecipients("alerts@example.com"), [
+  assert.deepStrictEqual(availabilityEmailRecipients("alerts@example.com", ""), [
     "alerts@example.com",
-    ...EXTRA_AVAILABILITY_EMAIL_TO,
+  ]);
+
+  const extras = "extra@example.com,ops@example.com";
+  assert.deepStrictEqual(extraAvailabilityEmailTo(extras), [
+    "extra@example.com",
+    "ops@example.com",
+  ]);
+  assert.deepStrictEqual(availabilityEmailRecipients("alerts@example.com", extras), [
+    "alerts@example.com",
+    "extra@example.com",
+    "ops@example.com",
   ]);
 
   const deduped = availabilityEmailRecipients(
-    ` ${EXTRA_AVAILABILITY_EMAIL_TO[0]},alerts@example.com `
+    " extra@example.com,alerts@example.com ",
+    extras
   );
-  assert.deepStrictEqual(deduped, ["nitin.gianchandani@gmail.com", "alerts@example.com", "nitin.gianchandani@keysight.com"]);
+  assert.deepStrictEqual(deduped, ["extra@example.com", "alerts@example.com", "ops@example.com"]);
 }
 
 testRoomParsing();

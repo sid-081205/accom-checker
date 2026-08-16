@@ -1,4 +1,11 @@
-const REPO = process.env.GITHUB_STATUS_REPO || "sid-081205/accom-checker";
+function statusRepo() {
+  const repo = process.env.GITHUB_STATUS_REPO;
+  if (!repo) {
+    throw new Error("GITHUB_STATUS_REPO is not configured (expected owner/repo).");
+  }
+  return repo;
+}
+
 const BRANCH = process.env.GITHUB_STATUS_BRANCH || "status";
 const DEFAULT_BRANCH = process.env.GITHUB_STATUS_DEFAULT_BRANCH || "master";
 
@@ -14,7 +21,7 @@ async function githubRequest(filePath, options = {}) {
   if (!token) return fallback;
 
   const response = await fetch(
-    `https://api.github.com/repos/${REPO}/contents/${filePath}?ref=${BRANCH}`,
+    `https://api.github.com/repos/${statusRepo()}/contents/${filePath}?ref=${BRANCH}`,
     {
       headers: {
         Accept: "application/vnd.github.raw+json",
@@ -49,7 +56,7 @@ async function getFileSha(filePath) {
   if (!token) return null;
 
   const response = await fetch(
-    `https://api.github.com/repos/${REPO}/contents/${filePath}?ref=${BRANCH}`,
+    `https://api.github.com/repos/${statusRepo()}/contents/${filePath}?ref=${BRANCH}`,
     {
       headers: {
         Accept: "application/vnd.github+json",
@@ -96,15 +103,15 @@ async function githubApi(route, options = {}) {
 }
 
 async function ensureStatusBranch() {
-  const existing = await githubApi(`/repos/${REPO}/git/ref/heads/${BRANCH}`, { write: true });
+  const existing = await githubApi(`/repos/${statusRepo()}/git/ref/heads/${BRANCH}`, { write: true });
   if (existing) return;
 
-  const source = await githubApi(`/repos/${REPO}/git/ref/heads/${DEFAULT_BRANCH}`, { write: true });
+  const source = await githubApi(`/repos/${statusRepo()}/git/ref/heads/${DEFAULT_BRANCH}`, { write: true });
   if (!source?.object?.sha) {
     throw new Error(`Could not resolve source branch ${DEFAULT_BRANCH}.`);
   }
 
-  await githubApi(`/repos/${REPO}/git/refs`, {
+  await githubApi(`/repos/${statusRepo()}/git/refs`, {
     method: "POST",
     write: true,
     body: JSON.stringify({
@@ -128,7 +135,7 @@ async function writeJsonFile(filePath, value, message) {
 
   for (let attempt = 1; attempt <= 3; attempt += 1) {
     const sha = await getFileSha(filePath);
-    const response = await fetch(`https://api.github.com/repos/${REPO}/contents/${filePath}`, {
+    const response = await fetch(`https://api.github.com/repos/${statusRepo()}/contents/${filePath}`, {
       method: "PUT",
       headers: {
         Accept: "application/vnd.github+json",
@@ -162,7 +169,7 @@ export async function dispatchChecker() {
   if (!token) return;
 
   const response = await fetch(
-    `https://api.github.com/repos/${REPO}/actions/workflows/check-availability.yml/dispatches`,
+    `https://api.github.com/repos/${statusRepo()}/actions/workflows/check-availability.yml/dispatches`,
     {
       method: "POST",
       headers: {
@@ -182,7 +189,14 @@ export async function dispatchChecker() {
 }
 
 const CRONJOB_API_BASE = "https://api.cron-job.org";
-const CRONJOB_CHECKER_JOB_ID = process.env.CRONJOB_CHECKER_JOB_ID || "7809757";
+
+function checkerCronJobId() {
+  const jobId = process.env.CRONJOB_CHECKER_JOB_ID;
+  if (!jobId) {
+    throw new Error("CRONJOB_CHECKER_JOB_ID is not configured.");
+  }
+  return jobId;
+}
 
 // Allowed checker cadences (minutes). Keep in sync with the dashboard toggle.
 export const CHECKER_INTERVAL_OPTIONS = [2, 5];
@@ -218,17 +232,17 @@ async function cronjobRequest(route, options = {}) {
 }
 
 export async function setCheckerCronEnabled(enabled) {
-  await cronjobRequest(`/jobs/${CRONJOB_CHECKER_JOB_ID}`, {
+  await cronjobRequest(`/jobs/${checkerCronJobId()}`, {
     method: "PATCH",
     body: JSON.stringify({ job: { enabled: Boolean(enabled) } }),
   });
 }
 
 async function getCheckerCronJob() {
-  const data = await cronjobRequest(`/jobs/${CRONJOB_CHECKER_JOB_ID}`);
+  const data = await cronjobRequest(`/jobs/${checkerCronJobId()}`);
   const job = data?.jobDetails;
   if (!job) {
-    throw new Error(`cron-job.org job ${CRONJOB_CHECKER_JOB_ID} was not found.`);
+    throw new Error(`cron-job.org job ${checkerCronJobId()} was not found.`);
   }
   return job;
 }
@@ -287,7 +301,7 @@ export async function setCheckerCronInterval(intervalMinutes) {
     minutes,
   };
 
-  await cronjobRequest(`/jobs/${CRONJOB_CHECKER_JOB_ID}`, {
+  await cronjobRequest(`/jobs/${checkerCronJobId()}`, {
     method: "PATCH",
     body: JSON.stringify({ job: { schedule } }),
   });
@@ -309,7 +323,7 @@ export async function dispatchSummary() {
   if (!token) return;
 
   const response = await fetch(
-    `https://api.github.com/repos/${REPO}/actions/workflows/daily-summary.yml/dispatches`,
+    `https://api.github.com/repos/${statusRepo()}/actions/workflows/daily-summary.yml/dispatches`,
     {
       method: "POST",
       headers: {
@@ -333,7 +347,7 @@ export async function getRecentCheckRuns(perPage = 10) {
   if (!token) return [];
 
   const data = await githubApi(
-    `/repos/${REPO}/actions/workflows/check-availability.yml/runs?per_page=${perPage}`
+    `/repos/${statusRepo()}/actions/workflows/check-availability.yml/runs?per_page=${perPage}`
   );
   return data?.workflow_runs || [];
 }
