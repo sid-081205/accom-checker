@@ -1,8 +1,19 @@
 # Agent instructions
 
-You are setting up **Accom Checker** for a new operator (a student or their friend). The repository is a template. It must not keep a previous operator’s mailbox, university login, GitHub repo name, Vercel project, or cron-job.org job IDs.
+You are setting up **Accom Checker** for a new operator (a student or their friend).
 
-If this repo was handed over, **delete every existing GitHub Actions secret and every Vercel environment variable first**, then create new ones from what **this** user gives you. Old `SMTP_*` / `EMAIL_*` / `LSE_*` values will keep sending from someone else’s Gmail and logging into someone else’s LSE account.
+## Fork first — do not set up on the original repo
+
+1. **Fork** this repository into the user’s own GitHub account (or an org they control).
+2. Clone **the fork**, not the upstream template URL.
+3. Do all work, secrets, Actions, Vercel, and cron-job.org jobs against **the fork only**.
+4. Never push secrets, cookies, or a filled-in `.env` back to the upstream template.
+
+The upstream repo is a blank template. Setting up on it would mix a new person’s login and mailbox with someone else’s GitHub account. If the user already cloned the original, stop and fork, then start over in the fork.
+
+---
+
+The rest of this file assumes you are already on the fork.
 
 ---
 
@@ -86,19 +97,13 @@ Vercel dashboard ── reads/writes `status` branch; pause/resume PATCHes
 
 ## Setup
 
-Work in **this user’s** GitHub repo, mail account, cron-job.org account, and Vercel project.
+Work only in **the user’s fork**, plus **their** mail account, cron-job.org account, and Vercel project.
 
-### 0. If this repo was transferred or forked from someone else
+### 1. Repository (the fork)
 
-1. GitHub → Settings → Secrets and variables → Actions → delete **all** secrets.
-2. Vercel (if a project is already linked) → delete **all** environment variables, or create a **new** Vercel project.
-3. Delete or replace the `status` branch with an empty one (`status.json` / `events.json` / `control.json` from a previous operator must not stay).
-4. The previous operator must disable their cron-job.org jobs and rotate any PAT that was in those jobs. You will create new jobs.
-
-### 1. Repository
-
-1. Use a repo the user controls. Keep `.env`, `.auth/`, and `.state/` gitignored.
-2. Create an empty `status` branch, or let the dashboard create it on first write from `GITHUB_STATUS_DEFAULT_BRANCH`.
+1. Confirm `git remote -v` points at the user’s fork, not the upstream template.
+2. Keep `.env`, `.auth/`, and `.state/` gitignored.
+3. Create an empty `status` branch on the fork, or let the dashboard create it on first write from `GITHUB_STATUS_DEFAULT_BRANCH`. Do not copy another operator’s `status` branch.
 
 ### 2. Local toolchain
 
@@ -213,11 +218,10 @@ Optional health watchdog: a third job can GET `https://<their-vercel-host>/api/w
 
 ## Handover checklist (outgoing operator)
 
-Do this **before** a friend clones or you transfer the GitHub repo. An agent cannot delete hosted secrets from this environment.
+Friends should **fork**, not take over this GitHub account. Still, before you share the link:
 
-1. GitHub → Settings → Secrets and variables → Actions → delete `SMTP_HOST`, `SMTP_PORT`, `SMTP_SECURE`, `SMTP_USER`, `SMTP_PASS`, `EMAIL_FROM`, `EMAIL_TO`, `EXTRA_AVAILABILITY_EMAIL_TO`, `LSE_EMAIL`, `LSE_PASSWORD`, `LSE_COOKIES_B64`, and any other secrets.
+1. Delete every GitHub Actions secret on this repo (`SMTP_*`, `EMAIL_*`, `LSE_*`, and anything else). An agent in this environment cannot delete them (API 403).
 2. Disable or delete your cron-job.org jobs (they still hold a GitHub PAT in request headers).
 3. Remove or recreate the Vercel project; delete its env vars.
 4. Rotate the GitHub PAT that cron-job.org and Vercel used.
-5. Replace the `status` branch with a clean empty branch (current files are redacted, but they still describe *your* runs and booking state).
-6. Know that **git history on `master` still contains old commits** with previous mailbox addresses and account names until you squash, orphan, or start a new repository. Merging a cleanup PR does not erase those commits. For a clean handoff, prefer a **new empty repo** and copy only the latest tree (this branch’s files), or rewrite history yourself.
+5. The `status` branch on this template should stay an empty store (no run history). Do not leave your booking state on a public branch.

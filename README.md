@@ -26,9 +26,10 @@ Anyone looking for LSE halls — you, a flatmate, a friend who is still on the w
 
 ## Setting it up
 
-Hand this repository to your own agent and point it at **[agent-instructions.md](agent-instructions.md)**.
+1. **Fork** this repository into your own GitHub account. Do not set it up on the original.
+2. Give your agent the **fork** and point it at **[agent-instructions.md](agent-instructions.md)**.
 
-That file is the setup manual: what to ask you for, where secrets live, and how to think about the project. Do not paste passwords or mailbox details into this README.
+That file is the setup manual: fork first, then what to ask you for, where secrets live, and how to think about the project. Do not paste passwords or mailbox details into this README.
 
 ---
 
@@ -46,4 +47,4 @@ If a check asks for Microsoft Authenticator or an email code, open the dashboard
 
 ## A note on sharing
 
-This is a tool for friends, not a hosted service with a public mailbox. Whoever operates it uses **their** university login and **their** mail. If you received this repo from someone else, your agent must create new secrets from scratch and must not reuse the previous operator’s accounts.
+This is a tool for friends, not a hosted service with a public mailbox. Fork it, then whoever operates the fork uses **their** university login and **their** mail. Never reuse another person’s secrets or accounts.
