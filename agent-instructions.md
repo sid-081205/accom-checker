@@ -25,7 +25,7 @@ The rest of this file assumes you are already on the fork.
 - **Do not use GitHub `on.schedule`.** It was removed on purpose (unreliable). Scheduling stays on cron-job.org (or any external cron that can POST to GitHub).
 - **The `status` branch is a data store**, not code. Every check rewrites `status.json`, `events.json`, and `control.json` there. Disable Vercel deploys for it (`dashboard/vercel.json` already does). Create this branch on the **fork**. Do not copy another repo’s `status` branch.
 - **Identity lives only in secrets.** Never hardcode a from-address, destination list, LSE credentials, `owner/repo`, Vercel URL, or cron-job.org job ID.
-- **Mail is generic SMTP.** There is no built-in Gmail (or any other) account. You collect the operator’s own provider settings. Do not assume Gmail.
+- **Mail is generic SMTP.** There is no built-in Gmail (or any other) account. You collect the operator’s own provider settings. `SMTP_USER`, `SMTP_PASS`, and `EMAIL_FROM` must come from this new user’s mailbox setup, never from past repos, old deployments, chat logs, or another operator.
 - **PII must not land on the status branch.** Writes go through `redactPii` / `sanitizeDeep` in `src/status.js`. Do not bypass that. Do not commit `.env`, `.auth/`, or `.state/`.
 - **Private GitHub repos burn Actions minutes.** A 5-minute cadence with ~2-minute runs can exhaust a private-repo allowance in days. Prefer a public repo (secrets stay in GitHub Secrets), a slower cadence, or a paid minutes budget. `/api/watchdog` only *detects* silent failure; it does not add minutes.
 
@@ -49,7 +49,7 @@ Do not invent values. Do not copy anything from git history, old issues, or anot
 | GitHub repo they own (`owner/repo`) and default branch name | Status writes, workflow dispatch, dashboard | `GITHUB_STATUS_REPO`, `GITHUB_REPOSITORY`, `GITHUB_REPO` |
 | LSE portal email + password | Re-login when cookies expire | `LSE_EMAIL`, `LSE_PASSWORD` (GitHub Secrets) |
 | SMTP host, port, TLS flag, username, password | Send mail from **their** account | `SMTP_*` (GitHub Secrets) |
-| From address that mailbox is allowed to send as | Envelope sender | `EMAIL_FROM` (optional; falls back to `SMTP_USER`) |
+| From address that mailbox is allowed to send as | Envelope sender. Must be this user’s own address; never reuse one from another setup. | `EMAIL_FROM` (optional; falls back to `SMTP_USER`) |
 | Destination address(es) | Who gets alerts + the daily summary | `EMAIL_TO` (comma-separated is fine) |
 | Optional extra availability-only recipients | Extra people on room alerts, not the daily summary | `EXTRA_AVAILABILITY_EMAIL_TO` |
 | Dashboard login password | Protects the Vercel UI | `DASHBOARD_PASSWORD` (Vercel) |
@@ -60,7 +60,7 @@ Do not invent values. Do not copy anything from git history, old issues, or anot
 | Shared cron token | Optional watchdog / `/api/cron` | `CRON_SECRET` |
 | Timezone and summary time | When the daily note fires | `TIMEZONE`, `SUMMARY_HOUR`, `SUMMARY_MINUTE` (defaults: Europe/London, 23:55) |
 
-If they do not have SMTP yet, help them create **their own** provider account (workspace mail, transactional email, or a personal mailbox with an app password). Never point the app at a previous operator’s mailbox.
+If they do not have SMTP yet, help them create **their own** provider account (workspace mail, transactional email, or a personal mailbox with an app password). Never point the app at a previous operator’s mailbox. This also applies to the from-address: `EMAIL_FROM` must be theirs, not copied from older repos.
 
 ---
 
@@ -137,8 +137,8 @@ Store the output as `LSE_COOKIES_B64`. Refresh it when sessions expire (`needs_m
 
 | Secret | Notes |
 |--------|--------|
-| `SMTP_HOST`, `SMTP_PORT`, `SMTP_SECURE`, `SMTP_USER`, `SMTP_PASS` | This user’s mail provider. `SMTP_SECURE` is the string `true` or `false`. |
-| `EMAIL_FROM` | Address they are allowed to send as. If omitted, code falls back to `SMTP_USER`. |
+| `SMTP_HOST`, `SMTP_PORT`, `SMTP_SECURE`, `SMTP_USER`, `SMTP_PASS` | This user’s mail provider and credentials only. `SMTP_SECURE` is the string `true` or `false`. |
+| `EMAIL_FROM` | Address this user is allowed to send as. Never reuse a previous operator’s sender. If omitted, code falls back to `SMTP_USER`. |
 | `EMAIL_TO` | Who receives the daily summary and (by default) availability alerts. |
 | `EXTRA_AVAILABILITY_EMAIL_TO` | Optional. Extra availability-alert recipients only. |
 | `LSE_EMAIL`, `LSE_PASSWORD` | Portal login used when cookies expire. |
