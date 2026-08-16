@@ -29,7 +29,7 @@ Anyone looking for LSE halls — you, a flatmate, a friend who is still on the w
 1. **Fork** this repository into your own GitHub account. Do not set it up on the original.
 2. Give your agent the **fork** and point it at **[agent-instructions.md](agent-instructions.md)**.
 
-That file is the setup manual: fork first, then what to ask you for, where secrets live, and how to think about the project. Do not paste passwords or mailbox details into this README.
+That file is the setup manual: fork first, then create a **new** mail setup, **new** schedule, and **new** Vercel project. Do not reuse another person’s Vercel app or its env vars. Do not paste passwords into this README.
 
 ---
 
