@@ -61,7 +61,7 @@ function redactPii(value) {
   out = out.replace(/[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/g, "[redacted-email]");
 
   // Labeled fields scraped from the LSE account / "About You" pages, e.g.
-  // "STUDENT ID | 202453296", "NAME | JANE DOE", "EMAIL ADDRESS | x@y".
+  // "STUDENT ID | 123456789", "NAME | JANE DOE", "EMAIL ADDRESS | x@y".
   out = out.replace(
     /\b(STUDENT ID|NAME|EMAIL ADDRESS|PREFERRED NAME|MOBILE NUMBER|PHONE|POSTCODE|ADDRESS|DATE OF BIRTH)\b(\s*[|:]\s*)([^|]*)/gi,
     (match, label, separator) => `${label}${separator}[redacted]`

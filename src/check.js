@@ -1028,7 +1028,7 @@ function availabilityEmailSubject(result) {
   const summary = summarizeRoomsForSubject(result.rooms);
   if (summary) {
     // Room list in the subject: shows what's available at a glance and gives
-    // different availability a different subject, so Gmail starts a new
+    // different availability a different subject, so mail clients start a new
     // thread when the rooms change instead of burying every alert in one.
     return `LSE rooms available: ${summary}`;
   }
@@ -1076,11 +1076,6 @@ function formatAvailabilityEmail(result) {
 
 const MAIL_SEND_ATTEMPTS = Number(process.env.MAIL_SEND_ATTEMPTS || 3);
 
-const EXTRA_AVAILABILITY_EMAIL_TO = [
-  "nitin.gianchandani@gmail.com",
-  "nitin.gianchandani@keysight.com",
-];
-
 function parseEmailList(value = "") {
   return String(value)
     .split(/[,;]+/)
@@ -1088,10 +1083,17 @@ function parseEmailList(value = "") {
     .filter(Boolean);
 }
 
-function availabilityEmailRecipients(emailTo = process.env.EMAIL_TO) {
+function extraAvailabilityEmailTo(value = process.env.EXTRA_AVAILABILITY_EMAIL_TO) {
+  return parseEmailList(value);
+}
+
+function availabilityEmailRecipients(
+  emailTo = process.env.EMAIL_TO,
+  extraTo = process.env.EXTRA_AVAILABILITY_EMAIL_TO
+) {
   const seen = new Set();
   const recipients = [];
-  for (const email of [...parseEmailList(emailTo), ...EXTRA_AVAILABILITY_EMAIL_TO]) {
+  for (const email of [...parseEmailList(emailTo), ...extraAvailabilityEmailTo(extraTo)]) {
     const key = email.toLowerCase();
     if (seen.has(key)) continue;
     seen.add(key);
@@ -1397,7 +1399,7 @@ module.exports = {
   availabilityEmailSubject,
   BODY_TEXT_ATTEMPTS,
   bodyText,
-  EXTRA_AVAILABILITY_EMAIL_TO,
+  extraAvailabilityEmailTo,
   formatAvailabilityEmail,
   hasNoAvailabilityBanner,
   isAccommodationAppCookie,

@@ -1,7 +1,7 @@
 {
   "name": "accom-checker",
   "version": "1.0.0",
-  "description": "Checks LSE accommodation availability and emails when rooms appear.",
+  "description": "Watches LSE student accommodation and alerts you when rooms appear.",
   "main": "src/check.js",
   "scripts": {
     "check": "node src/check.js",

@@ -20,6 +20,7 @@ jobs:
       SMTP_PASS: ${{ secrets.SMTP_PASS }}
       EMAIL_FROM: ${{ secrets.EMAIL_FROM }}
       EMAIL_TO: ${{ secrets.EMAIL_TO }}
+      EXTRA_AVAILABILITY_EMAIL_TO: ${{ secrets.EXTRA_AVAILABILITY_EMAIL_TO }}
       GITHUB_TOKEN: ${{ github.token }}
       GITHUB_REPOSITORY: ${{ github.repository }}
 
