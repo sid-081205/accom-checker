@@ -6,10 +6,11 @@ You are setting up **Accom Checker** for a new operator (a student or their frie
 
 1. **Fork** this repository into the user’s own GitHub account (or an org they control).
 2. Clone **the fork**, not the upstream template URL.
-3. Do all work, secrets, Actions, Vercel, and cron-job.org jobs against **the fork only**.
-4. Never push secrets, cookies, or a filled-in `.env` back to the upstream template.
+3. Do all work, secrets, Actions, and scheduling against **the fork only**.
+4. Create a **new** Vercel project from that fork. Never open, link, import, or copy env vars from a previous operator’s Vercel project, URL, or team.
+5. Never push secrets, cookies, or a filled-in `.env` back to the upstream template.
 
-The upstream repo is a blank template. Setting up on it would mix a new person’s login and mailbox with someone else’s GitHub account. If the user already cloned the original, stop and fork, then start over in the fork.
+The upstream repo is a blank template. Setting up on it, or attaching an old Vercel project to it, would mix a new person’s login and mailbox with someone else’s accounts. If the user already cloned the original or you found an existing Vercel deployment, stop. Fork, then create everything new on the fork.
 
 ---
 
@@ -22,7 +23,7 @@ The rest of this file assumes you are already on the fork.
 - **The checker is the product.** `src/check.js` (Selenium + Chrome on GitHub Actions) is the only path that can see rooms and send an availability alert. Everything else exists to start that job, keep a login session alive, or show status.
 - **The dashboard is not on the critical path.** cron-job.org should POST `workflow_dispatch` **directly to the GitHub API**. Vercel is for viewing status and submitting MFA / email codes. If Vercel is down, checks must still run.
 - **Do not use GitHub `on.schedule`.** It was removed on purpose (unreliable). Scheduling stays on cron-job.org (or any external cron that can POST to GitHub).
-- **The `status` branch is a data store**, not code. Every check rewrites `status.json`, `events.json`, and `control.json` there. Disable Vercel deploys for it (`dashboard/vercel.json` already does). If you inherited this repo, replace that branch with a fresh empty one so you do not keep the previous operator’s run history.
+- **The `status` branch is a data store**, not code. Every check rewrites `status.json`, `events.json`, and `control.json` there. Disable Vercel deploys for it (`dashboard/vercel.json` already does). Create this branch on the **fork**. Do not copy another repo’s `status` branch.
 - **Identity lives only in secrets.** Never hardcode a from-address, destination list, LSE credentials, `owner/repo`, Vercel URL, or cron-job.org job ID.
 - **Mail is generic SMTP.** There is no built-in Gmail (or any other) account. You collect the operator’s own provider settings. Do not assume Gmail.
 - **PII must not land on the status branch.** Writes go through `redactPii` / `sanitizeDeep` in `src/status.js`. Do not bypass that. Do not commit `.env`, `.auth/`, or `.state/`.
@@ -33,8 +34,9 @@ The rest of this file assumes you are already on the fork.
 - Commit secrets, cookies, PATs, SMTP passwords, or a filled-in `.env`.
 - Re-add hardcoded extra recipients, a default `owner/repo`, or a default cron-job.org job ID.
 - Re-add GitHub-native `schedule:` triggers.
-- Reuse a previous operator’s SMTP user, from-address, destination addresses, LSE login, or cron job IDs.
-- Force-push or wipe the `status` branch without an explicit user request (except: on a handed-over repo, ask once, then replace it with a clean branch).
+- Reuse a previous operator’s SMTP user, from-address, destination addresses, LSE login, cron job IDs, Vercel project, Vercel URL, or Vercel env vars.
+- Run `vercel link` / `vercel pull` against an existing project, or import an already-deployed dashboard.
+- Force-push or wipe a `status` branch that is not on this user’s fork.
 
 ---
 
@@ -97,7 +99,7 @@ Vercel dashboard ── reads/writes `status` branch; pause/resume PATCHes
 
 ## Setup
 
-Work only in **the user’s fork**, plus **their** mail account, cron-job.org account, and Vercel project.
+Build a **new** install: the user’s fork + their mail + their cron-job.org account + a **new** Vercel project. Treat any existing Vercel deployment as belonging to someone else — ignore its URL, team, project name, and environment variables.
 
 ### 1. Repository (the fork)
 
@@ -166,10 +168,14 @@ Copy the **checker** job’s numeric ID. That is `CRONJOB_CHECKER_JOB_ID`.
 
 Optional health watchdog: a third job can GET `https://<their-vercel-host>/api/watchdog` every 15 minutes with `Authorization: Bearer <CRON_SECRET>` and cron-job.org failure emails enabled (`onFailureCount: 2`). That alert is sent by cron-job.org, not by this app’s SMTP.
 
-### 6. Dashboard (Vercel)
+### 6. Dashboard — new Vercel project only
 
-1. Import **this user’s** clone. Set the Root Directory to `dashboard`.
-2. Set Production environment variables:
+Create a **new** project. Do not reuse, relink, or look up a previous Vercel instance.
+
+1. Log into **this user’s** Vercel account (or have them create one).
+2. **Add New Project** → import **the fork** (not the upstream template).
+3. Set Root Directory to `dashboard`. Do not import env vars from another project.
+4. Add these Production variables from scratch (values the user just gave you):
 
 | Variable | Notes |
 |----------|--------|
@@ -183,8 +189,10 @@ Optional health watchdog: a third job can GET `https://<their-vercel-host>/api/w
 | `CRONJOB_CHECKER_JOB_ID` | **Their** checker job ID from step 5 |
 | `CRON_SECRET` | If you use `/api/cron`, `/api/summary`, or `/api/watchdog` |
 
-3. Confirm `status`-branch deploys stay disabled (`dashboard/vercel.json`).
-4. Test Start / Stop on the dashboard (that enables/disables **their** cron-job.org checker job).
+5. Confirm `status`-branch deploys stay disabled (`dashboard/vercel.json`).
+6. Deploy. Use only the new project’s URL. Test Start / Stop there (that enables/disables **their** new cron-job.org checker job).
+
+Do **not**: open an old `*.vercel.app` URL, copy its env, run `vercel link` to an existing project, or point cron-job.org at a previous dashboard host.
 
 ### 7. Smoke test
 
@@ -216,12 +224,6 @@ Optional health watchdog: a third job can GET `https://<their-vercel-host>/api/w
 
 ---
 
-## Handover checklist (outgoing operator)
+## Incoming-agent rule
 
-Friends should **fork**, not take over this GitHub account. Still, before you share the link:
-
-1. Delete every GitHub Actions secret on this repo (`SMTP_*`, `EMAIL_*`, `LSE_*`, and anything else). An agent in this environment cannot delete them (API 403).
-2. Disable or delete your cron-job.org jobs (they still hold a GitHub PAT in request headers).
-3. Remove or recreate the Vercel project; delete its env vars.
-4. Rotate the GitHub PAT that cron-job.org and Vercel used.
-5. The `status` branch on this template should stay an empty store (no run history). Do not leave your booking state on a public branch.
+You are setting up a **new** project for this user. Fork → new secrets → new cron jobs → **new Vercel project**. If you find a previous Vercel deployment, URL, team, or `.vercel` link, ignore it and create a new project from the fork.
